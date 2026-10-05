@@ -6,6 +6,7 @@
 //!
 //! 新增一个平台适配器不超过 200 行，且不必改动核心代码即可注册
 
+pub mod epic;
 pub mod generic;
 pub mod steam;
 pub mod vdf;
@@ -67,6 +68,7 @@ pub trait LauncherAdapter {
 pub fn adapters() -> Vec<Box<dyn LauncherAdapter>> {
     vec![
         Box::new(steam::SteamAdapter),
+        Box::new(epic::EpicAdapter),
         Box::new(generic::GenericAdapter),
     ]
 }
@@ -76,10 +78,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_contains_steam_and_generic() {
+    fn registry_contains_steam_epic_and_generic() {
         let list = adapters();
         let platforms: Vec<&str> = list.iter().map(|a| a.platform()).collect();
         assert!(platforms.contains(&"steam"));
+        assert!(platforms.contains(&"epic"));
         assert!(platforms.contains(&"generic"));
     }
 

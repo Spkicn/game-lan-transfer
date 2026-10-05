@@ -8,6 +8,7 @@
 
 pub mod generic;
 pub mod steam;
+pub mod vdf;
 
 /// 适配器统一错误。库 crate 一律用 thiserror，禁止跨边界传 String。
 #[derive(Debug, thiserror::Error)]

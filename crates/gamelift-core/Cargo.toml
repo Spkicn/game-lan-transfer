@@ -11,3 +11,4 @@ workspace = true
 
 [dependencies]
 thiserror = "2"
+fs4 = "0.13"

@@ -1,9 +1,11 @@
 //! `GameLift` 传输引擎。
 //!
-//! 职责：局域网对端发现、分块传输与校验、断点续传、进度上报
+//! 职责：局域网对端发现、分块传输与校验、断点续传、进度上报。
 //! 本 crate 不依赖任何 UI 框架，供 CLI、Tauri 壳与测试共同复用
 
+pub mod link;
 pub mod manifest;
+pub mod transfer;
 
 /// crate 级错误类型。库 crate 一律用 thiserror，禁止跨边界传 String。
 #[derive(Debug, thiserror::Error)]
@@ -15,6 +17,18 @@ pub enum Error {
     /// 目标磁盘空间不足。携带缺口字节数，调用方据此给出可执行建议。
     #[error("空间不足，还差 {0} 字节")]
     InsufficientSpace(u64),
+
+    /// 找不到可用的物理以太网口。
+    #[error("找不到物理以太网口（已排除虚拟网卡与无线）")]
+    NicNotFound,
+
+    /// 外部命令（PowerShell / netsh / robocopy）执行失败。
+    #[error("命令执行失败: {0}")]
+    Shell(String),
+
+    /// IO 错误。
+    #[error("IO 错误: {0}")]
+    Io(String),
 }
 
 /// 便捷 Result 别名。

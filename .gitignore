@@ -16,5 +16,11 @@ target/tmp/
 .env
 *.log
 
+# 设计流程的中间产物（方向契约与配置保留）
+.impeccable/build/
+.impeccable/mocks/
+.impeccable/review/
+.impeccable/config.local.json
+
 # 内部资料，不入库
 docs/

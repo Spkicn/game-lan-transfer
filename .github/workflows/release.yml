@@ -1,6 +1,6 @@
 name: Release
 
-# 打 tag（app-v*）触发：构建 Windows 产物并起草 release，人工核对后发布。
+# 打 tag（app-v*）触发：构建 CLI 与桌面安装包，起草 pre-release，人工核对后发布
 on:
   push:
     tags:
@@ -10,11 +10,13 @@ permissions:
   contents: write
 
 jobs:
-  build-windows:
+  cli:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.99.0
       - uses: Swatinem/rust-cache@v2
       - name: 构建 CLI
         run: cargo build --release -p gamelift-cli
@@ -23,5 +25,49 @@ jobs:
         with:
           name: gamelift-cli-windows
           path: target/release/gamelift-cli.exe
-      # TODO(Spkicn, 2026-10-05): 桌面应用建成后，改用 tauri-apps/tauri-action@v1
-      #   with: tagName: app-v__VERSION__, releaseDraft: true, projectPath: apps/desktop
+
+  desktop:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.99.0
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: apps/desktop/pnpm-lock.yaml
+      - name: 安装前端依赖
+        working-directory: apps/desktop
+        run: pnpm install --frozen-lockfile
+      - name: 构建安装包并起草 release
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: apps/desktop
+          tagName: app-v__VERSION__
+          releaseName: "GameLift __VERSION__"
+          releaseDraft: true
+          prerelease: true
+          releaseBody: |
+            桌面应用 Windows 安装包（NSIS），双击安装即用。
+
+            ### 这个版本能做什么
+
+            - 三屏完成搬运：扫描游戏库 → 选内容与目标盘 → 传输进度
+            - 界面里即可配置或还原点对点直连地址，只连无线网卡也能传
+            - 分块传输带逐块校验与断点续传；目标机已有旧版本时只传变化的块
+            - 支持 Steam、Epic 与任意文件夹
+
+            ### 已知限制
+
+            - 安装包未做代码签名，首次运行 Windows 会提示未知发布者，选“更多信息 → 仍要运行”
+            - 平台适配器目前只有 Steam 与 Epic，战网 / EA / Ubisoft / GOG 尚未支持
+            - 需要目标盘预留足够空间，传输前会做预检并给出提示
+            - 首次在真机使用时，建议先用小体积内容跑通一次完整流程

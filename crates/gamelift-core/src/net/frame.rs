@@ -15,6 +15,12 @@ pub const KIND_CONTROL: u8 = 1;
 /// 分块数据帧
 pub const KIND_CHUNK: u8 = 2;
 
+/// 差异传输的哈希清单帧
+pub const KIND_HASHES: u8 = 3;
+
+/// 差异计划帧
+pub const KIND_PLAN: u8 = 4;
+
 /// 帧头长度，4 字节长度加 1 字节类型
 pub const HEADER_BYTES: usize = 5;
 

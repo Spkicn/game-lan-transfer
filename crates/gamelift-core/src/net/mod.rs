@@ -9,6 +9,7 @@ use std::time::Duration;
 use crate::Error;
 
 pub mod client;
+pub mod diff;
 pub mod discovery;
 pub mod frame;
 pub mod paths;

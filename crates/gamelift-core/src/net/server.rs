@@ -3,6 +3,7 @@
 //! 只暴露构造时给出的根目录，且拒绝监听全部接口
 //! 分块摘要由源端即时计算并随块下发，接收端据此判断传输是否损坏
 
+use std::collections::HashMap;
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -12,7 +13,8 @@ use std::thread::{self, JoinHandle};
 
 use crate::{Error, Result};
 
-use super::frame::{read_frame, write_frame, Frame};
+use super::diff;
+use super::frame::{read_frame, write_frame, Frame, KIND_CONTROL, KIND_HASHES, KIND_PLAN};
 use super::paths::{join_within, sanitize_relative};
 use super::protocol::{self, ClaimFile, FileEntry, Message, RejectKind, PROTOCOL_VERSION};
 use super::{DIGEST_BYTES, IO_POLL_INTERVAL};
@@ -290,20 +292,53 @@ fn serve_requests(
     session: &Arc<Session>,
 ) -> Result<()> {
     while let Some(frame) = read_frame(reader)? {
-        if !frame.is_control() {
-            return Err(Error::Protocol("源端只接受控制帧".to_owned()));
-        }
-        match protocol::decode(&frame.payload)? {
-            Message::RequestChunk { file, offset, len } => {
-                serve_chunk(writer, session, file, offset, len)?;
-            }
-            Message::Bye => break,
+        match frame.kind {
+            KIND_CONTROL => match protocol::decode(&frame.payload)? {
+                Message::RequestChunk { file, offset, len } => {
+                    serve_chunk(writer, session, file, offset, len)?;
+                }
+                Message::Bye => return Ok(()),
+                other => {
+                    return Err(Error::Protocol(format!("源端不接受该消息: {other:?}")));
+                }
+            },
+            KIND_HASHES => serve_diff(writer, session, &frame.payload)?,
             other => {
-                return Err(Error::Protocol(format!("源端不接受该消息: {other:?}")));
+                return Err(Error::Protocol(format!("源端不认识帧类型 {other}")));
             }
         }
     }
     Ok(())
+}
+
+/// 差异预交换：按接收端给出的旧块摘要，只列出需要下发的块
+fn serve_diff(writer: &mut impl Write, session: &Arc<Session>, payload: &[u8]) -> Result<()> {
+    let (file, hashes) = diff::decode_hashes(payload)?;
+    let Some(entry) = usize::try_from(file)
+        .ok()
+        .and_then(|index| session.files.get(index))
+    else {
+        return send_rejected(writer, RejectKind::NotFound, "文件下标越界");
+    };
+    let relative = sanitize_relative(&entry.relative)?;
+    let path = join_within(&session.options.root, &relative)?;
+    let source = match diff::index_file(&path) {
+        Ok(source) => source,
+        Err(err) => return send_rejected(writer, RejectKind::Source, &err.to_string()),
+    };
+    let wanted: HashMap<[u8; DIGEST_BYTES], u32> = hashes
+        .iter()
+        .enumerate()
+        .map(|(index, hash)| (*hash, u32::try_from(index).unwrap_or(u32::MAX)))
+        .collect();
+    let plan = diff::build_plan(&source, &wanted);
+    write_frame(
+        writer,
+        &Frame {
+            kind: KIND_PLAN,
+            payload: diff::encode_plan(file, &plan),
+        },
+    )
 }
 
 /// 下发一个分块，负载为 `blake3` 摘要加数据

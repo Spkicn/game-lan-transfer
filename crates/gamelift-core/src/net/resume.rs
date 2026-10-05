@@ -9,7 +9,18 @@ use serde::{Deserialize, Serialize};
 use crate::{Error, Result};
 
 /// 状态结构版本，字段变更时递增
-pub const STATE_VERSION: u32 = 1;
+pub const STATE_VERSION: u32 = 2;
+
+/// 一个分块在文件中的位置与长度
+///
+/// 固定大小切分时为空，差异传输时记录内容定义分块的真实边界
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Span {
+    /// 起始偏移
+    pub offset: u64,
+    /// 长度
+    pub len: u32,
+}
 
 /// 单个文件的续传状态
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -20,6 +31,38 @@ pub struct FileState {
     pub size: u64,
     /// 分块完成位图，十六进制字符串，每字节低位在前
     pub bitmap: String,
+    /// 分块边界，空表示按固定大小切分
+    #[serde(default)]
+    pub spans: Vec<Span>,
+}
+
+impl FileState {
+    /// 分块总数
+    #[must_use]
+    pub fn chunk_count(&self, chunk_bytes: u64) -> u64 {
+        if self.spans.is_empty() {
+            chunk_count(self.size, chunk_bytes)
+        } else {
+            u64::try_from(self.spans.len()).unwrap_or(u64::MAX)
+        }
+    }
+
+    /// 第 `index` 块的偏移与长度，越界返回 `None`
+    #[must_use]
+    pub fn span_at(&self, index: u64, chunk_bytes: u64) -> Option<(u64, u64)> {
+        if self.spans.is_empty() {
+            if index >= chunk_count(self.size, chunk_bytes) {
+                return None;
+            }
+            let offset = index * chunk_bytes;
+            let len = chunk_bytes.min(self.size.saturating_sub(offset));
+            return Some((offset, len));
+        }
+        let span = self
+            .spans
+            .get(usize::try_from(index).unwrap_or(usize::MAX))?;
+        Some((span.offset, u64::from(span.len)))
+    }
 }
 
 /// 一次传输的续传状态
@@ -155,10 +198,8 @@ impl TransferState {
         let state: Self = serde_json::from_str(&text)
             .map_err(|err| Error::Protocol(format!("续传状态解析失败: {err}")))?;
         if state.version != STATE_VERSION {
-            return Err(Error::Protocol(format!(
-                "续传状态版本 {} 不受支持",
-                state.version
-            )));
+            // 旧版本状态直接作废，按首次传输处理，避免用户面出现无法理解的报错
+            return Ok(None);
         }
         Ok(Some(state))
     }
@@ -203,7 +244,7 @@ impl TransferState {
     pub fn completed_chunks(&self) -> u64 {
         let mut done = 0;
         for file in &self.files {
-            let chunks = chunk_count(file.size, self.chunk_bytes);
+            let chunks = file.chunk_count(self.chunk_bytes);
             let Ok(bitmap) = decode_bitmap(&file.bitmap, bitmap_bytes(chunks)) else {
                 continue;
             };
@@ -217,14 +258,15 @@ impl TransferState {
     pub fn completed_bytes(&self) -> u64 {
         let mut done = 0;
         for file in &self.files {
-            let chunks = chunk_count(file.size, self.chunk_bytes);
+            let chunks = file.chunk_count(self.chunk_bytes);
             let Ok(bitmap) = decode_bitmap(&file.bitmap, bitmap_bytes(chunks)) else {
                 continue;
             };
             for index in 0..chunks {
                 if bit_get(&bitmap, index) {
-                    let offset = index * self.chunk_bytes;
-                    done += self.chunk_bytes.min(file.size.saturating_sub(offset));
+                    if let Some((_, len)) = file.span_at(index, self.chunk_bytes) {
+                        done += len;
+                    }
                 }
             }
         }
@@ -292,6 +334,29 @@ mod tests {
                 path: "data.bin".to_owned(),
                 size: 10,
                 bitmap: encode_bitmap(&bitmap),
+                spans: Vec::new(),
+            }],
+        )
+    }
+
+    fn spanned_state() -> TransferState {
+        // 三个不定长分块：0..5、5..9、9..10
+        let spans = vec![
+            Span { offset: 0, len: 5 },
+            Span { offset: 5, len: 4 },
+            Span { offset: 9, len: 1 },
+        ];
+        let mut bitmap = vec![0u8; bitmap_bytes(3)];
+        bit_set(&mut bitmap, 0);
+        bit_set(&mut bitmap, 2);
+        TransferState::new(
+            "差异示例".to_owned(),
+            4,
+            vec![FileState {
+                path: "data.bin".to_owned(),
+                size: 10,
+                bitmap: encode_bitmap(&bitmap),
+                spans,
             }],
         )
     }
@@ -301,6 +366,18 @@ mod tests {
         let state = sample_state();
         assert_eq!(state.completed_chunks(), 1);
         assert_eq!(state.completed_bytes(), 4);
+    }
+
+    #[test]
+    fn spanned_state_uses_real_boundaries() {
+        let state = spanned_state();
+        let file = &state.files[0];
+        assert_eq!(file.chunk_count(state.chunk_bytes), 3);
+        assert_eq!(file.span_at(0, state.chunk_bytes), Some((0, 5)));
+        assert_eq!(file.span_at(2, state.chunk_bytes), Some((9, 1)));
+        assert_eq!(file.span_at(3, state.chunk_bytes), None);
+        assert_eq!(state.completed_chunks(), 2);
+        assert_eq!(state.completed_bytes(), 6);
     }
 
     #[test]
@@ -326,7 +403,7 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_version_is_rejected() {
+    fn unsupported_version_is_treated_as_absent() {
         let dir = temp_dir("version");
         let path = state_path(&dir, "x");
         std::fs::write(
@@ -334,7 +411,20 @@ mod tests {
             r#"{"version":99,"chunk_bytes":4,"title":"t","files":[]}"#,
         )
         .expect("write");
-        assert!(TransferState::load(&path).is_err());
+        assert!(TransferState::load(&path).expect("load").is_none());
+        std::fs::remove_dir_all(&dir).expect("cleanup");
+    }
+
+    #[test]
+    fn old_version_state_is_discarded() {
+        let dir = temp_dir("old-version");
+        let path = state_path(&dir, "x");
+        std::fs::write(
+            &path,
+            r#"{"version":1,"chunk_bytes":4,"title":"t","files":[{"path":"a","size":4,"bitmap":"01"}]}"#,
+        )
+        .expect("write");
+        assert!(TransferState::load(&path).expect("load").is_none());
         std::fs::remove_dir_all(&dir).expect("cleanup");
     }
 }

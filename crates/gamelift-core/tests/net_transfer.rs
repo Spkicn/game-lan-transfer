@@ -2,7 +2,7 @@
 //!
 //! 全部绑 `127.0.0.1`，端口从 18000 起顺次分配，不依赖外网
 
-#![allow(clippy::expect_used, clippy::unwrap_used)]
+#![allow(clippy::expect_used, clippy::unwrap_used, clippy::cast_precision_loss)]
 
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -84,6 +84,7 @@ fn recv_options(peer: SocketAddr, dest: &Path, chunk_bytes: u32) -> RecvOptions 
         chunk_bytes,
         cancel: None,
         force: false,
+        old_root: None,
     }
 }
 
@@ -150,6 +151,7 @@ fn resume_sends_only_missing_chunks() {
             path: "big.bin".to_owned(),
             size: payload.len() as u64,
             bitmap: resume::encode_bitmap(&bitmap),
+            spans: Vec::new(),
         }],
     );
     let state_path = resume::state_path(&dest, "demo");
@@ -473,6 +475,75 @@ fn protocol_version_mismatch_is_rejected() {
     let err = recv(&options, &mut |_| {}).expect_err("must reject");
     assert!(matches!(err, Error::Protocol(_)), "got {err:?}");
     let _ = handle.join();
+    let _ = std::fs::remove_dir_all(&dest);
+}
+
+/// 不可压缩的确定性数据，避免重复模式干扰分块切点
+fn pseudo_random(len: usize) -> Vec<u8> {
+    let mut state = 0x0f1e_2d3c_4b5a_6978u64;
+    (0..len)
+        .map(|_| {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            u8::try_from((state >> 33) % 256).unwrap_or(0)
+        })
+        .collect()
+}
+
+#[test]
+fn small_update_transfers_under_ten_percent() {
+    let src = temp_dir("update-src");
+    let chunk = 64 * 1024u32;
+    let v1 = pseudo_random(4 * 1024 * 1024);
+    let mut v2 = v1.clone();
+    let start = v2.len() / 2;
+    let span = v2.len() / 25;
+    for (offset, byte) in v2[start..start + span].iter_mut().enumerate() {
+        *byte = u8::try_from((offset * 31) % 256).unwrap_or(0) ^ 0x5a;
+    }
+    std::fs::write(src.join("big.bin"), &v1).expect("write v1");
+
+    let mut host = Host::start(host_options(&src, free_port(), chunk)).expect("host");
+    let dest = temp_dir("update-dest");
+
+    // 第一轮全量拉取旧版本
+    let options = recv_options(host.local_addr(), &dest, chunk);
+    let first = recv(&options, &mut |_| {}).expect("first recv");
+    assert_eq!(read_file(&first.root.join("big.bin")), v1);
+
+    // 源端换成新版本，大小不变，清单依旧有效
+    std::fs::write(src.join("big.bin"), &v2).expect("write v2");
+    let before = host.bytes_sent();
+
+    // 第二轮对已有副本做差异传输
+    let mut diff_options = recv_options(host.local_addr(), &dest, chunk);
+    diff_options.force = true;
+    diff_options.old_root = Some(first.root.clone());
+    let second = recv(&diff_options, &mut |_| {}).expect("diff recv");
+
+    let transferred = host.bytes_sent().saturating_sub(before);
+    let total = u64::try_from(v2.len()).unwrap_or(0);
+    println!(
+        "小更新差异传输：改动 {:.1}% 内容，实际传输 {:.1}%",
+        span as f64 / total as f64 * 100.0,
+        transferred as f64 / total as f64 * 100.0
+    );
+    assert_eq!(
+        read_file(&second.root.join("big.bin")),
+        v2,
+        "差异传输结果必须与源端一致"
+    );
+    assert!(
+        transferred * 10 < total,
+        "改动 4% 时传输量应低于全量 10%，实际 {transferred}/{total}"
+    );
+    assert!(
+        second.bytes_received * 10 < total,
+        "会话内接收量也应低于全量 10%"
+    );
+    host.shutdown();
+    let _ = std::fs::remove_dir_all(&src);
     let _ = std::fs::remove_dir_all(&dest);
 }
 

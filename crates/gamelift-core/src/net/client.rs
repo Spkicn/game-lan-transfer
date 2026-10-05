@@ -4,7 +4,7 @@
 //! 续传状态与暂存目录分离，避免状态文件跟着内容一起被搬进游戏目录
 
 use std::collections::VecDeque;
-use std::io::{BufReader, BufWriter, Seek, SeekFrom, Write};
+use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,7 +14,8 @@ use std::time::{Duration, Instant};
 
 use crate::{Error, Result, TransferStats};
 
-use super::frame::{read_frame, write_frame, Frame};
+use super::diff;
+use super::frame::{read_frame, write_frame, Frame, KIND_HASHES, KIND_PLAN};
 use super::paths::{join_within, sanitize_relative};
 use super::protocol::{self, ClaimFile, FileEntry, Message, RejectKind, PROTOCOL_VERSION};
 use super::resume::{self, FileState, TransferState};
@@ -62,6 +63,8 @@ pub struct RecvOptions {
     pub cancel: Option<Arc<AtomicBool>>,
     /// 目标目录已存在时是否覆盖
     pub force: bool,
+    /// 目标机上已有副本的根目录，给出后启用差异传输
+    pub old_root: Option<PathBuf>,
 }
 
 /// 接收结果
@@ -87,6 +90,15 @@ struct RemoteManifest {
     files: Vec<FileEntry>,
     total_bytes: u64,
     claim_files: Vec<ClaimFile>,
+}
+
+/// 单个文件的差异计划与本地旧块位置
+#[derive(Debug, Clone)]
+struct DiffPlan {
+    /// 源端给出的分块计划
+    plan: Vec<diff::PlanEntry>,
+    /// 本地旧副本的分块索引，命中时按其中的位置拷贝
+    local: Vec<diff::ChunkHash>,
 }
 
 /// 待拉取的一个分块
@@ -170,7 +182,8 @@ pub fn recv(
 ) -> Result<RecvOutcome> {
     let chunk_bytes = u64::from(clamp_chunk_bytes(options.chunk_bytes));
     let streams = clamp_streams(options.streams);
-    let manifest = fetch_manifest(options)?;
+    let (mut control, manifest) =
+        open_control(options.peer, options.pairing.as_deref(), &options.want)?;
     if manifest.files.is_empty() {
         return Err(Error::Protocol("源端清单里没有文件".to_owned()));
     }
@@ -184,8 +197,11 @@ pub fn recv(
     let final_root = join_within(&options.dest_parent, &root_name)?;
     let state_path = resume::state_path(&options.dest_parent, &manifest.root_name);
     std::fs::create_dir_all(&options.dest_parent).map_err(io_error)?;
-    clear_existing(options, &final_root)?;
+    check_existing(options, &final_root)?;
     check_space(&options.dest_parent, manifest.total_bytes)?;
+
+    let plans = plan_diff(&mut control, options, &manifest)?;
+    drop(control);
 
     let resumable = staging.is_dir() && state_path.is_file();
     if !resumable {
@@ -194,18 +210,10 @@ pub fn recv(
     }
     std::fs::create_dir_all(&staging).map_err(io_error)?;
     let staged_paths = prepare_staging(&staging, &manifest.files)?;
-    let base = load_state(&state_path, &manifest, chunk_bytes, resumable)?;
-    let progress_cell = Arc::new(Mutex::new(build_progress(
-        &base,
-        &manifest,
-        chunk_bytes,
-        &staged_paths,
-    )));
-    let queue = Mutex::new(build_queue(
-        &manifest.files,
-        &lock(&progress_cell),
-        chunk_bytes,
-    )?);
+    let base = load_state(&state_path, &manifest, chunk_bytes, resumable, &plans)?;
+    let progress_cell = Arc::new(Mutex::new(build_progress(&base, &staged_paths)));
+    copy_matched_chunks(options, &base, &plans, &staged_paths, &progress_cell)?;
+    let queue = Mutex::new(build_queue(&base, &lock(&progress_cell))?);
     let context = Arc::new(WorkerContext {
         peer: options.peer,
         pairing: options.pairing.clone(),
@@ -321,8 +329,7 @@ fn finish(
     done: u64,
 ) -> Result<RecvOutcome> {
     verify_staged(staging, &session.manifest.files)?;
-    std::fs::rename(staging, final_root)
-        .map_err(|err| Error::Io(format!("提交 {} 失败: {err}", final_root.display())))?;
+    commit(staging, final_root)?;
     let claim_files = write_claim_files(options, &session.manifest.claim_files)?;
     TransferState::remove(&session.state_path)?;
     Ok(RecvOutcome {
@@ -334,18 +341,46 @@ fn finish(
     })
 }
 
-/// 目标目录已存在时按参数处理
-fn clear_existing(options: &RecvOptions, final_root: &Path) -> Result<()> {
-    if !final_root.exists() {
-        return Ok(());
-    }
-    if !options.force {
+/// 目标目录已存在时必须显式允许覆盖，真正的替换放到提交阶段
+fn check_existing(options: &RecvOptions, final_root: &Path) -> Result<()> {
+    if final_root.exists() && !options.force {
         return Err(Error::Io(format!(
             "目标目录已存在: {}，确认覆盖请加 --force",
             final_root.display()
         )));
     }
-    std::fs::remove_dir_all(final_root).map_err(|err| Error::Io(format!("清理目标目录失败: {err}")))
+    Ok(())
+}
+
+/// 把暂存目录提交为目标目录，先挪开旧目录，失败再挪回来
+fn commit(staging: &Path, final_root: &Path) -> Result<()> {
+    if !final_root.exists() {
+        return std::fs::rename(staging, final_root)
+            .map_err(|err| Error::Io(format!("提交 {} 失败: {err}", final_root.display())));
+    }
+    let backup = final_root.with_file_name(format!(
+        ".gamelift-old-{}",
+        final_root.file_name().map_or_else(
+            || "target".to_owned(),
+            |name| name.to_string_lossy().into_owned()
+        )
+    ));
+    let _ = std::fs::remove_dir_all(&backup);
+    std::fs::rename(final_root, &backup)
+        .map_err(|err| Error::Io(format!("挪开旧目录失败: {err}")))?;
+    match std::fs::rename(staging, final_root) {
+        Ok(()) => {
+            let _ = std::fs::remove_dir_all(&backup);
+            Ok(())
+        }
+        Err(err) => {
+            let _ = std::fs::rename(&backup, final_root);
+            Err(Error::Io(format!(
+                "提交 {} 失败: {err}",
+                final_root.display()
+            )))
+        }
+    }
 }
 
 /// 空间预检
@@ -384,78 +419,110 @@ fn load_state(
     manifest: &RemoteManifest,
     chunk_bytes: u64,
     resumable: bool,
+    plans: &[Option<DiffPlan>],
 ) -> Result<TransferState> {
     if resumable {
         if let Some(existing) = TransferState::load(state_path)? {
-            if state_matches(&existing, manifest, chunk_bytes) {
+            if state_matches(&existing, manifest, chunk_bytes, plans) {
                 return Ok(existing);
             }
         }
     }
-    let state = initial_state(manifest, chunk_bytes);
+    let state = initial_state(manifest, chunk_bytes, plans);
     state.save(state_path)?;
     Ok(state)
 }
 
-/// 续传状态是否与本次清单一致
-fn state_matches(state: &TransferState, manifest: &RemoteManifest, chunk_bytes: u64) -> bool {
-    state.chunk_bytes == chunk_bytes
-        && state.title == manifest.title
-        && state.files.len() == manifest.files.len()
-        && state
-            .files
-            .iter()
-            .zip(manifest.files.iter())
-            .all(|(declared, entry)| declared.path == entry.path && declared.size == entry.size)
+/// 续传状态是否与本次清单和差异计划一致
+fn state_matches(
+    state: &TransferState,
+    manifest: &RemoteManifest,
+    chunk_bytes: u64,
+    plans: &[Option<DiffPlan>],
+) -> bool {
+    if state.chunk_bytes != chunk_bytes
+        || state.title != manifest.title
+        || state.files.len() != manifest.files.len()
+    {
+        return false;
+    }
+    manifest.files.iter().enumerate().all(|(index, entry)| {
+        let Some(declared) = state.files.get(index) else {
+            return false;
+        };
+        declared.path == entry.path
+            && declared.size == entry.size
+            && declared.spans == expected_spans(index, plans)
+    })
 }
 
-/// 按清单构造空状态
-fn initial_state(manifest: &RemoteManifest, chunk_bytes: u64) -> TransferState {
+/// 差异计划对应的分块边界，全量传输时为空
+fn expected_spans(index: usize, plans: &[Option<DiffPlan>]) -> Vec<resume::Span> {
+    plans
+        .get(index)
+        .and_then(|plan| plan.as_ref())
+        .map(|plan| {
+            plan.plan
+                .iter()
+                .map(|entry| resume::Span {
+                    offset: entry.span.offset,
+                    len: entry.span.len,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// 按清单与差异计划构造空状态
+fn initial_state(
+    manifest: &RemoteManifest,
+    chunk_bytes: u64,
+    plans: &[Option<DiffPlan>],
+) -> TransferState {
     let files = manifest
         .files
         .iter()
-        .map(|entry| {
-            let chunks = resume::chunk_count(entry.size, chunk_bytes);
+        .enumerate()
+        .map(|(index, entry)| {
+            let spans = expected_spans(index, plans);
+            let chunks = if spans.is_empty() {
+                resume::chunk_count(entry.size, chunk_bytes)
+            } else {
+                u64::try_from(spans.len()).unwrap_or(u64::MAX)
+            };
             FileState {
                 path: entry.path.clone(),
                 size: entry.size,
                 bitmap: resume::encode_bitmap(&vec![0u8; resume::bitmap_bytes(chunks)]),
+                spans,
             }
         })
         .collect();
     TransferState::new(manifest.title.clone(), chunk_bytes, files)
 }
 
-/// 由续传状态还原实时进度，磁盘上文件比清单短时清掉对应完成位
-fn build_progress(
-    state: &TransferState,
-    manifest: &RemoteManifest,
-    chunk_bytes: u64,
-    staged_paths: &[PathBuf],
-) -> Progress {
-    let mut files = Vec::with_capacity(manifest.files.len());
+/// 由续传状态还原实时进度，磁盘上文件比声明的短时清掉对应完成位
+fn build_progress(state: &TransferState, staged_paths: &[PathBuf]) -> Progress {
+    let mut files = Vec::with_capacity(state.files.len());
     let mut done_bytes = 0u64;
-    for (index, entry) in manifest.files.iter().enumerate() {
-        let chunks = resume::chunk_count(entry.size, chunk_bytes);
+    for (index, file) in state.files.iter().enumerate() {
+        let chunks = file.chunk_count(state.chunk_bytes);
         let bytes = resume::bitmap_bytes(chunks);
-        let declared = state
-            .files
-            .get(index)
-            .map_or("", |file| file.bitmap.as_str());
         let mut bitmap =
-            resume::decode_bitmap(declared, bytes).unwrap_or_else(|_| vec![0u8; bytes]);
+            resume::decode_bitmap(&file.bitmap, bytes).unwrap_or_else(|_| vec![0u8; bytes]);
         let on_disk = staged_paths
             .get(index)
             .and_then(|path| std::fs::metadata(path).ok())
             .map_or(0, |meta| meta.len());
         for chunk in 0..chunks {
-            let offset = chunk * chunk_bytes;
-            let chunk_len = chunk_bytes.min(entry.size.saturating_sub(offset));
-            if offset.saturating_add(chunk_len) > on_disk {
+            let Some((offset, len)) = file.span_at(chunk, state.chunk_bytes) else {
+                continue;
+            };
+            if offset.saturating_add(len) > on_disk {
                 resume::bit_clear(&mut bitmap, chunk);
             }
             if resume::bit_get(&bitmap, chunk) {
-                done_bytes += chunk_len;
+                done_bytes += len;
             }
         }
         files.push(FileProgress { bitmap, chunks });
@@ -472,24 +539,21 @@ fn build_progress(
 /// # Errors
 ///
 /// 文件数或分块长度超出协议上限时返回 [`Error::Protocol`]
-fn build_queue(
-    files: &[FileEntry],
-    progress: &Progress,
-    chunk_bytes: u64,
-) -> Result<VecDeque<ChunkRef>> {
+fn build_queue(state: &TransferState, progress: &Progress) -> Result<VecDeque<ChunkRef>> {
     let mut queue = VecDeque::new();
-    for (index, entry) in files.iter().enumerate() {
-        let Some(file) = progress.files.get(index) else {
+    for (index, file) in state.files.iter().enumerate() {
+        let Some(live) = progress.files.get(index) else {
             continue;
         };
         let file_index =
             u32::try_from(index).map_err(|_| Error::Protocol("文件数量超出协议上限".to_owned()))?;
-        for chunk in 0..file.chunks {
-            if resume::bit_get(&file.bitmap, chunk) {
+        for chunk in 0..live.chunks {
+            if resume::bit_get(&live.bitmap, chunk) {
                 continue;
             }
-            let offset = chunk * chunk_bytes;
-            let len = chunk_bytes.min(entry.size.saturating_sub(offset));
+            let Some((offset, len)) = file.span_at(chunk, state.chunk_bytes) else {
+                continue;
+            };
             let len = u32::try_from(len)
                 .map_err(|_| Error::Protocol("分块长度超出协议上限".to_owned()))?;
             queue.push_back(ChunkRef {
@@ -503,6 +567,94 @@ fn build_queue(
     Ok(queue)
 }
 
+/// 命中的分块直接从旧副本拷到暂存文件，不占用网络
+///
+/// # Errors
+///
+/// 旧副本读取或暂存文件写入失败时返回 [`Error::Io`]
+fn copy_matched_chunks(
+    options: &RecvOptions,
+    base: &TransferState,
+    plans: &[Option<DiffPlan>],
+    staged_paths: &[PathBuf],
+    progress_cell: &Mutex<Progress>,
+) -> Result<()> {
+    let Some(old_root) = options.old_root.as_ref() else {
+        return Ok(());
+    };
+    for (index, plan) in plans.iter().enumerate() {
+        let Some(plan) = plan.as_ref() else {
+            continue;
+        };
+        let Some(staged) = staged_paths.get(index) else {
+            continue;
+        };
+        let Some(file_state) = base.files.get(index) else {
+            continue;
+        };
+        let relative = sanitize_relative(&file_state.path)?;
+        let old_path = join_within(old_root, &relative)?;
+        if !old_path.is_file() {
+            continue;
+        }
+        let mut source = std::fs::File::open(&old_path)
+            .map_err(|err| Error::Io(format!("打开 {} 失败: {err}", old_path.display())))?;
+        let file_index = u32::try_from(index).unwrap_or(u32::MAX);
+        for (chunk_index, entry) in plan.plan.iter().enumerate() {
+            let Some(matched) = entry.matched else {
+                continue;
+            };
+            let Some(local) = usize::try_from(matched)
+                .ok()
+                .and_then(|slot| plan.local.get(slot))
+            else {
+                continue;
+            };
+            let chunk_index = u64::try_from(chunk_index).unwrap_or(u64::MAX);
+            if is_chunk_done(progress_cell, index, chunk_index) {
+                continue;
+            }
+            let len = usize::try_from(entry.span.len).unwrap_or(0);
+            let mut buffer = vec![0u8; len];
+            source
+                .seek(SeekFrom::Start(local.span.offset))
+                .map_err(io_error)?;
+            source.read_exact(&mut buffer).map_err(io_error)?;
+            write_at(staged, entry.span.offset, &buffer)?;
+            record_done(
+                progress_cell,
+                &ChunkRef {
+                    file: file_index,
+                    chunk_index,
+                    offset: entry.span.offset,
+                    len: entry.span.len,
+                },
+                false,
+            );
+        }
+    }
+    Ok(())
+}
+
+/// 某块是否已完成
+fn is_chunk_done(progress_cell: &Mutex<Progress>, file: usize, chunk: u64) -> bool {
+    let guard = lock(progress_cell);
+    guard
+        .files
+        .get(file)
+        .is_some_and(|live| resume::bit_get(&live.bitmap, chunk))
+}
+
+/// 把一段数据写到指定偏移
+fn write_at(path: &Path, offset: u64, data: &[u8]) -> Result<()> {
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .map_err(io_error)?;
+    file.seek(SeekFrom::Start(offset)).map_err(io_error)?;
+    file.write_all(data).map_err(io_error)
+}
+
 /// 由实时进度导出可落盘的续传状态
 fn snapshot_state(base: &TransferState, progress_cell: &Mutex<Progress>) -> TransferState {
     let guard = lock(progress_cell);
@@ -514,6 +666,7 @@ fn snapshot_state(base: &TransferState, progress_cell: &Mutex<Progress>) -> Tran
             path: declared.path.clone(),
             size: declared.size,
             bitmap: resume::encode_bitmap(&live.bitmap),
+            spans: declared.spans.clone(),
         })
         .collect();
     TransferState {
@@ -579,14 +732,18 @@ fn write_claim_files(options: &RecvOptions, claims: &[ClaimFile]) -> Result<Vec<
     Ok(written)
 }
 
-/// 取清单：控制连接握手一次
-fn fetch_manifest(options: &RecvOptions) -> Result<RemoteManifest> {
-    let stream = connect(options.peer)?;
+/// 建立控制连接并完成握手，返回连接与清单
+fn open_control(
+    peer: SocketAddr,
+    pairing: Option<&str>,
+    want: &str,
+) -> Result<(Connection, RemoteManifest)> {
+    let stream = connect(peer)?;
     let mut conn = Connection::new(stream)?;
     conn.send(&Message::Hello {
         version: PROTOCOL_VERSION,
-        pairing: options.pairing.clone(),
-        want: options.want.clone(),
+        pairing: pairing.map(str::to_owned),
+        want: want.to_owned(),
         need_manifest: true,
     })?;
     match conn.read()? {
@@ -597,17 +754,102 @@ fn fetch_manifest(options: &RecvOptions) -> Result<RemoteManifest> {
             files,
             total_bytes,
             claim_files,
-        }) => Ok(RemoteManifest {
-            title,
-            root_name,
-            files,
-            total_bytes,
-            claim_files,
-        }),
+        }) => Ok((
+            conn,
+            RemoteManifest {
+                title,
+                root_name,
+                files,
+                total_bytes,
+                claim_files,
+            },
+        )),
         Some(Message::Rejected { kind, message }) => Err(reject_error(kind, &message)),
         Some(other) => Err(Error::Protocol(format!("源端返回了意外消息: {other:?}"))),
         None => Err(Error::Protocol("源端在握手后立即关闭连接".to_owned())),
     }
+}
+
+/// 对端清单摘要，供界面在传输前做预检
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteInfo {
+    /// 展示标题
+    pub title: String,
+    /// 目标根目录名
+    pub root_name: String,
+    /// 内容总字节数
+    pub total_bytes: u64,
+    /// 文件数量
+    pub file_count: usize,
+}
+
+/// 只取对端清单，不传输数据
+///
+/// # Errors
+///
+/// 连接失败、被配对码拒绝或清单非法时返回错误
+pub fn probe(peer: SocketAddr, pairing: Option<&str>, want: &str) -> Result<RemoteInfo> {
+    let (_conn, manifest) = open_control(peer, pairing, want)?;
+    Ok(RemoteInfo {
+        title: manifest.title,
+        root_name: manifest.root_name,
+        total_bytes: manifest.total_bytes,
+        file_count: manifest.files.len(),
+    })
+}
+
+/// 差异预交换：把旧副本的分块摘要发给源端，换回缺失块清单
+///
+/// # Errors
+///
+/// 未给出旧副本根目录时返回全 `None`；交换失败返回协议错误
+fn plan_diff(
+    control: &mut Connection,
+    options: &RecvOptions,
+    manifest: &RemoteManifest,
+) -> Result<Vec<Option<DiffPlan>>> {
+    let Some(old_root) = options.old_root.as_ref() else {
+        return Ok(vec![None; manifest.files.len()]);
+    };
+    let mut plans = Vec::with_capacity(manifest.files.len());
+    for (index, entry) in manifest.files.iter().enumerate() {
+        let relative = sanitize_relative(&entry.path)?;
+        let old_path = join_within(old_root, &relative)?;
+        if !old_path.is_file() {
+            plans.push(None);
+            continue;
+        }
+        let local = diff::index_file(&old_path)?;
+        if local.is_empty() {
+            plans.push(None);
+            continue;
+        }
+        let file =
+            u32::try_from(index).map_err(|_| Error::Protocol("文件数量超出协议上限".to_owned()))?;
+        let hashes: Vec<[u8; DIGEST_BYTES]> = local.iter().map(|chunk| chunk.hash).collect();
+        control.send_frame(&Frame {
+            kind: KIND_HASHES,
+            payload: diff::encode_hashes(file, &hashes),
+        })?;
+        let Some(frame) = read_frame(&mut control.reader)? else {
+            return Err(Error::Protocol("源端在差异交换中关闭连接".to_owned()));
+        };
+        if frame.kind == crate::net::frame::KIND_CONTROL {
+            return match protocol::decode(&frame.payload)? {
+                Message::Rejected { kind, message } => Err(reject_error(kind, &message)),
+                other => Err(Error::Protocol(format!("差异交换得到意外消息: {other:?}"))),
+            };
+        }
+        if frame.kind != KIND_PLAN {
+            return Err(Error::Protocol(format!(
+                "差异交换得到意外的帧类型 {}",
+                frame.kind
+            )));
+        }
+        let (_, plan) = diff::decode_plan(&frame.payload)?;
+        plans.push(Some(DiffPlan { plan, local }));
+    }
+    Ok(plans)
 }
 
 /// 建立带超时的连接
@@ -650,6 +892,11 @@ impl Connection {
             &mut self.writer,
             &Frame::control(protocol::encode(message)?),
         )
+    }
+
+    /// 发送任意类型的帧
+    fn send_frame(&mut self, frame: &Frame) -> Result<()> {
+        write_frame(&mut self.writer, frame)
     }
 
     /// 读取控制消息，对端关闭返回 `None`
@@ -726,7 +973,7 @@ fn worker_loop(context: &Arc<WorkerContext>) -> Result<()> {
             match active.fetch(&chunk) {
                 Ok(data) => {
                     write_chunk(context, &chunk, &data)?;
-                    record_done(context, &chunk);
+                    record_done(&context.progress, &chunk, true);
                     done = true;
                     break;
                 }
@@ -785,9 +1032,9 @@ fn write_chunk(context: &Arc<WorkerContext>, chunk: &ChunkRef, data: &[u8]) -> R
     Ok(())
 }
 
-/// 记录一个分块完成
-fn record_done(context: &Arc<WorkerContext>, chunk: &ChunkRef) {
-    let mut guard = lock(&context.progress);
+/// 记录一个分块完成，`from_network` 区分远程拉取与本地命中拷贝
+fn record_done(progress_cell: &Mutex<Progress>, chunk: &ChunkRef, from_network: bool) {
+    let mut guard = lock(progress_cell);
     let Some(index) = usize::try_from(chunk.file).ok() else {
         return;
     };
@@ -800,7 +1047,9 @@ fn record_done(context: &Arc<WorkerContext>, chunk: &ChunkRef) {
     }
     if newly {
         guard.done_bytes += u64::from(chunk.len);
-        guard.received_bytes += u64::from(chunk.len);
+        if from_network {
+            guard.received_bytes += u64::from(chunk.len);
+        }
     }
 }
 
@@ -836,25 +1085,52 @@ mod tests {
     #[test]
     fn state_matches_only_for_same_manifest() {
         let manifest = sample_manifest(vec![("a.bin", 10)]);
-        let state = initial_state(&manifest, 4);
-        assert!(state_matches(&state, &manifest, 4));
-        assert!(!state_matches(&state, &manifest, 8));
+        let plans = vec![None];
+        let state = initial_state(&manifest, 4, &plans);
+        assert!(state_matches(&state, &manifest, 4, &plans));
+        assert!(!state_matches(&state, &manifest, 8, &plans));
         assert!(!state_matches(
             &state,
             &sample_manifest(vec![("a.bin", 11)]),
-            4
+            4,
+            &plans
         ));
         assert!(!state_matches(
             &state,
             &sample_manifest(vec![("b.bin", 10)]),
-            4
+            4,
+            &plans
         ));
+    }
+
+    #[test]
+    fn diff_plan_replaces_chunk_boundaries() {
+        let manifest = sample_manifest(vec![("a.bin", 10)]);
+        let plan = DiffPlan {
+            plan: vec![
+                diff::PlanEntry {
+                    span: diff::ChunkSpan { offset: 0, len: 6 },
+                    matched: Some(0),
+                },
+                diff::PlanEntry {
+                    span: diff::ChunkSpan { offset: 6, len: 4 },
+                    matched: None,
+                },
+            ],
+            local: Vec::new(),
+        };
+        let state = initial_state(&manifest, 4, &[Some(plan.clone())]);
+        assert_eq!(state.files[0].spans.len(), 2);
+        assert_eq!(state.files[0].chunk_count(4), 2);
+        assert!(state_matches(&state, &manifest, 4, &[Some(plan)]));
+        assert!(!state_matches(&state, &manifest, 4, &[None]));
     }
 
     #[test]
     fn queue_skips_completed_chunks() {
         let manifest = sample_manifest(vec![("a.bin", 10)]);
-        let mut state = initial_state(&manifest, 4);
+        let plans = vec![None];
+        let mut state = initial_state(&manifest, 4, &plans);
         let mut bitmap = resume::decode_bitmap(&state.files[0].bitmap, 1).expect("decode");
         resume::bit_set(&mut bitmap, 0);
         state.files[0].bitmap = resume::encode_bitmap(&bitmap);
@@ -863,8 +1139,8 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("mkdir");
         let paths = prepare_staging(&dir, &manifest.files).expect("staging");
         std::fs::write(&paths[0], vec![0u8; 4]).expect("write");
-        let progress = build_progress(&state, &manifest, 4, &paths);
-        let queue = build_queue(&manifest.files, &progress, 4).expect("queue");
+        let progress = build_progress(&state, &paths);
+        let queue = build_queue(&state, &progress).expect("queue");
         let chunks: Vec<u64> = queue.iter().map(|chunk| chunk.chunk_index).collect();
         assert_eq!(chunks, vec![1, 2]);
         assert_eq!(progress.done_bytes, 4);
@@ -874,7 +1150,8 @@ mod tests {
     #[test]
     fn progress_drops_bits_beyond_disk_length() {
         let manifest = sample_manifest(vec![("a.bin", 10)]);
-        let mut state = initial_state(&manifest, 4);
+        let plans = vec![None];
+        let mut state = initial_state(&manifest, 4, &plans);
         let mut bitmap = resume::decode_bitmap(&state.files[0].bitmap, 1).expect("decode");
         resume::bit_set(&mut bitmap, 0);
         resume::bit_set(&mut bitmap, 1);
@@ -885,8 +1162,8 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("mkdir");
         let paths = prepare_staging(&dir, &manifest.files).expect("staging");
         std::fs::write(&paths[0], vec![0u8; 5]).expect("write");
-        let progress = build_progress(&state, &manifest, 4, &paths);
-        let queue = build_queue(&manifest.files, &progress, 4).expect("queue");
+        let progress = build_progress(&state, &paths);
+        let queue = build_queue(&state, &progress).expect("queue");
         let chunks: Vec<u64> = queue.iter().map(|chunk| chunk.chunk_index).collect();
         assert_eq!(chunks, vec![1, 2]);
         std::fs::remove_dir_all(&dir).expect("cleanup");

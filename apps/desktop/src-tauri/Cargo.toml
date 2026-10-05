@@ -9,6 +9,10 @@ repository.workspace = true
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+[features]
+# 生产构建：内嵌前端产物，不再连 dev server；tauri build 会自动启用
+custom-protocol = ["tauri/custom-protocol"]
+
 [dependencies]
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }

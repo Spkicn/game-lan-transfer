@@ -44,9 +44,11 @@ cargo clippy --workspace --all-targets -- -D warnings
 pnpm --dir apps/desktop install
 pnpm --dir apps/desktop typecheck
 pnpm --dir apps/desktop test
-pnpm --dir apps/desktop tauri dev     # 本地起窗口
-pnpm --dir apps/desktop tauri build   # 打安装包
+pnpm --dir apps/desktop tauri dev     # 本地起窗口，走 Vite 开发服务器
+pnpm --dir apps/desktop tauri build   # 打安装包，内嵌前端产物
 ```
+
+直接用 `cargo build` 构建桌面壳时会走开发服务器地址，需要先用 `pnpm --dir apps/desktop dev` 起前端；要一个能独立运行的二进制，用 `cargo build --release -p gamelift-desktop --features custom-protocol`。
 
 ## 使用
 

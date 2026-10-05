@@ -182,7 +182,7 @@ function ConnectStage({
     });
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[1fr_auto_1fr]">
+    <div className="grid h-full min-h-[440px] gap-6 lg:grid-cols-[1.15fr_0.85fr_1.15fr]">
       <Port
         label="本机"
         name={network?.nic_name ?? '未检测到网卡'}
@@ -233,7 +233,6 @@ function ConnectStage({
         </div>
         <p className="text-[12px] text-ink-faint">{network?.hint ?? '正在读取网络'}</p>
       </Port>
-
       <LinkRail
         state={linkState}
         caption={peer ? '跳线已接上' : state.busy ? '正在找对端' : '等待跳线'}

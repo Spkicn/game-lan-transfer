@@ -46,26 +46,26 @@ export function Port({
   slot?: boolean;
 }) {
   return (
-    <section className="flex min-w-0 flex-col gap-3">
+    <section className="flex h-full min-w-0 flex-col gap-3">
       <header className="flex items-center justify-between gap-3">
         <span className="label">{label}</span>
         <Lamp state={lamp} />
       </header>
       <div
         className={cn(
-          'border px-4 py-3',
+          'flex flex-1 flex-col justify-start gap-2 border px-4 py-4',
           slot ? 'border-dashed border-panel-edge bg-transparent' : 'border-panel-edge bg-panel-face',
         )}
       >
-        <p className="truncate text-[17px] font-semibold tracking-tight">{name}</p>
-        <p className="reading mt-1 truncate text-[13px] text-ink-dim">{endpoint}</p>
+        <p className="truncate text-[19px] font-semibold tracking-tight">{name}</p>
+        <p className="reading truncate text-[13px] text-ink-dim">{endpoint}</p>
       </div>
-      {children}
+      <div className="flex flex-col gap-3">{children}</div>
     </section>
   );
 }
 
-/** 跳线：两端之间只走 45° 与 90° 的折线 */
+/** 跳线：两端之间只走 45° 与 90° 的折线，横跨整个中间列 */
 export function LinkRail({
   state,
   caption,
@@ -80,18 +80,22 @@ export function LinkRail({
         ? 'var(--color-lamp-fault)'
         : 'var(--color-panel-edge)';
   return (
-    <div className="flex flex-col items-center justify-center gap-2 px-2">
-      <svg viewBox="0 0 140 72" className="h-16 w-full" aria-hidden>
+    <div className="flex h-full flex-col items-center justify-center gap-3">
+      <svg
+        viewBox="0 0 200 60"
+        preserveAspectRatio="none"
+        className="-mx-6 h-16 w-[calc(100%+3rem)]"
+        aria-hidden
+      >
         <path
-          d="M4 36 H52 L74 14 H136"
+          d="M0 30 H70 L95 8 H130 L155 30 H200"
           fill="none"
           stroke={stroke}
           strokeWidth="2"
+          vectorEffect="non-scaling-stroke"
           strokeLinejoin="miter"
-          strokeDasharray={state === 'idle' ? '4 5' : undefined}
+          strokeDasharray={state === 'idle' ? '5 6' : undefined}
         />
-        <circle cx="4" cy="36" r="3" fill={stroke} />
-        <circle cx="136" cy="14" r="3" fill={stroke} />
       </svg>
       <p className="label text-center">{caption}</p>
     </div>

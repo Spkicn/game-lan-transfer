@@ -1,0 +1,20 @@
+# Rust
+/target/
+
+# Node
+node_modules/
+dist/
+
+# Tauri
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/
+
+# 测试临时输出（AGENTS.md §2 约定的测试目录）
+target/tmp/
+
+# 本地环境
+.env
+*.log
+
+# 内部资料，不入库
+docs/

@@ -1,0 +1,43 @@
+name: Bug 报告
+description: 报告一个 Bug（必填版本号与日志）
+labels: ["bug"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: GameLift 版本
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: 操作系统
+      options:
+        - Windows 11
+        - Windows 10
+        - 其他
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 发生了什么？
+      description: 预期行为 vs 实际行为
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 打开 GameLift
+        2. 点击"扫描游戏库"
+        3. ……
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志（设置 → 导出日志）
+      render: text

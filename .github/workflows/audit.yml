@@ -1,0 +1,15 @@
+name: 依赖审计
+
+on:
+  schedule:
+    - cron: "0 9 * * 1" # 每周一 09:00
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}

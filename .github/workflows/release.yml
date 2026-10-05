@@ -1,0 +1,27 @@
+name: Release
+
+# 打 tag（app-v*）触发：构建 Windows 产物并起草 release，人工核对后发布。
+on:
+  push:
+    tags:
+      - "app-v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: 构建 CLI
+        run: cargo build --release -p gamelift-cli
+      - name: 上传 CLI 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: gamelift-cli-windows
+          path: target/release/gamelift-cli.exe
+      # TODO(Spkicn, 2026-10-05): 桌面应用建成后，改用 tauri-apps/tauri-action@v1
+      #   with: tagName: app-v__VERSION__, releaseDraft: true, projectPath: apps/desktop

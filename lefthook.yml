@@ -1,0 +1,9 @@
+# lefthook 配置：pre-commit 只做轻量检查，重活交 CI。
+# 安装：pip install lefthook && lefthook install
+pre-commit:
+  commands:
+    rustfmt:
+      glob: "*.rs"
+      run: cargo fmt --all --check
+    basics:
+      run: git diff --cached --check

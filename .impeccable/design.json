@@ -1,0 +1,208 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-05T22:00:00+08:00",
+  "title": "Design System: GameLift",
+  "extensions": {
+    "colorMeta": {
+      "lamp-flow": {
+        "role": "primary",
+        "displayName": "流量蓝",
+        "canonical": "#4c9dff",
+        "tonalRamp": ["#0d2a4d", "#12406f", "#185a9b", "#2477c7", "#4c9dff", "#7fbaff", "#b3d6ff", "#dceaff"]
+      },
+      "lamp-ready": {
+        "role": "secondary",
+        "displayName": "链路青绿",
+        "canonical": "#35d39a",
+        "tonalRamp": ["#0a3a2a", "#0e5640", "#147a5a", "#1ba276", "#35d39a", "#6ee2b6", "#a8efd3", "#d6f8eb"]
+      },
+      "lamp-idle": {
+        "role": "tertiary",
+        "displayName": "待命琥珀",
+        "canonical": "#e0a63c",
+        "tonalRamp": ["#3d2a0c", "#5c4013", "#80591b", "#a67424", "#e0a63c", "#ecc078", "#f5daae", "#fbeed7"]
+      },
+      "lamp-fault": {
+        "role": "tertiary",
+        "displayName": "故障朱",
+        "canonical": "#e2604f",
+        "tonalRamp": ["#401813", "#5f241c", "#853127", "#ab4033", "#e2604f", "#ec8b7d", "#f5bcb3", "#fbe3df"]
+      },
+      "panel": {
+        "role": "neutral",
+        "displayName": "机架炭",
+        "canonical": "#12161c",
+        "tonalRamp": ["#0a0d11", "#12161c", "#1c222b", "#2a323e", "#414b59", "#6b7788", "#a7b0bd", "#e8edf5"]
+      },
+      "panel-rail": {
+        "role": "neutral",
+        "displayName": "导轨黑",
+        "canonical": "#0d1116",
+        "tonalRamp": ["#070a0d", "#0d1116", "#161b22", "#242c36", "#3a4451", "#616c7c", "#9ba5b3", "#dee4ec"]
+      },
+      "panel-face": {
+        "role": "neutral",
+        "displayName": "面板钢",
+        "canonical": "#171d25",
+        "tonalRamp": ["#0b0f14", "#171d25", "#212932", "#303a47", "#495563", "#717d8d", "#a9b2bf", "#e8edf5"]
+      },
+      "panel-edge": {
+        "role": "neutral",
+        "displayName": "缝线灰",
+        "canonical": "#232b36",
+        "tonalRamp": ["#0c1015", "#141920", "#232b36", "#333d4a", "#4d5765", "#767f8d", "#adb5c1", "#e8edf5"]
+      },
+      "panel-hole": {
+        "role": "neutral",
+        "displayName": "孔位黑",
+        "canonical": "#0a0d11",
+        "tonalRamp": ["#05070a", "#0a0d11", "#131820", "#212832", "#38414e", "#5f6a79", "#98a2b0", "#dce2ea"]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "亮字",
+        "canonical": "#e8edf5",
+        "tonalRamp": ["#0a0d11", "#171d25", "#2a323e", "#4c5765", "#7c8797", "#adb6c2", "#d3d9e2", "#e8edf5"]
+      },
+      "ink-dim": {
+        "role": "neutral",
+        "displayName": "柔字",
+        "canonical": "#93a1b4",
+        "tonalRamp": ["#0f141a", "#1b222b", "#2f3945", "#4d5866", "#6b7788", "#93a1b4", "#c1c9d4", "#e8edf5"]
+      },
+      "ink-faint": {
+        "role": "neutral",
+        "displayName": "淡字",
+        "canonical": "#6b7788",
+        "tonalRamp": ["#0c1015", "#161b22", "#252d38", "#3d4653", "#57616f", "#6b7788", "#a7b0bd", "#dde3eb"]
+      }
+    },
+    "typographyMeta": {
+      "port-name": { "displayName": "机位名", "purpose": "两台机器的名字，一屏两处" },
+      "title": { "displayName": "内容名", "purpose": "面板行里的游戏名或文件夹名" },
+      "body": { "displayName": "正文", "purpose": "说明句、按钮文字、输入值" },
+      "reading": { "displayName": "读数", "purpose": "速率、剩余时间、已传字节、地址与端口" },
+      "label": { "displayName": "标签", "purpose": "机位标签、阶段页签、状态字" },
+      "readout": { "displayName": "大读数", "purpose": "待发清单总量，一屏一个" }
+    },
+    "shadows": [],
+    "motion": [
+      { "name": "state-transition", "value": "100ms linear", "purpose": "按键与行的颜色变化" },
+      { "name": "row-flap", "value": "140ms steps(3, end)", "purpose": "行内状态字翻牌，状态变化只重排该行" },
+      { "name": "rail-width", "value": "200ms linear", "purpose": "进度带长度随已传字节推进" }
+    ],
+    "breakpoints": [
+      { "name": "md", "value": "768px" },
+      { "name": "window-min", "value": "900x620" },
+      { "name": "window-default", "value": "1100x760" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "一屏唯一的主操作，放在底部状态条最右或动作发生处",
+      "html": "<button class=\"ds-btn-primary\">发送给对端</button>",
+      "css": ".ds-btn-primary { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 36px; padding: 0 16px; background: var(--color-lamp-flow, #4c9dff); color: var(--color-panel-hole, #0a0d11); border: none; border-radius: 0; font-family: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif; font-size: 14px; font-weight: 500; cursor: pointer; transition: background-color 100ms linear; } .ds-btn-primary:hover { background: color-mix(in oklab, var(--color-lamp-flow, #4c9dff) 88%, white); } .ds-btn-primary:focus-visible { outline: 2px solid var(--color-lamp-flow, #4c9dff); outline-offset: 2px; } .ds-btn-primary:disabled { opacity: 0.4; cursor: default; }"
+    },
+    {
+      "name": "Key Button",
+      "kind": "button",
+      "refersTo": "button-key",
+      "description": "面板上的次级按键，1px 缝线边界",
+      "html": "<button class=\"ds-btn-key\">找对端</button>",
+      "css": ".ds-btn-key { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 32px; padding: 0 12px; background: var(--color-panel-face, #171d25); color: var(--color-ink, #e8edf5); border: 1px solid var(--color-panel-edge, #232b36); border-radius: 0; font-family: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif; font-size: 13px; font-weight: 500; cursor: pointer; transition: color 100ms linear, border-color 100ms linear; } .ds-btn-key:hover { color: var(--color-lamp-flow, #4c9dff); border-color: var(--color-lamp-flow, #4c9dff); } .ds-btn-key:focus-visible { outline: 2px solid var(--color-lamp-flow, #4c9dff); outline-offset: 2px; } .ds-btn-key:disabled { opacity: 0.4; cursor: default; }"
+    },
+    {
+      "name": "Quiet Button",
+      "kind": "button",
+      "refersTo": "button-quiet",
+      "description": "无底色的文字操作，用于取消与返回",
+      "html": "<button class=\"ds-btn-quiet\">断开</button>",
+      "css": ".ds-btn-quiet { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 36px; padding: 0 16px; background: transparent; color: var(--color-ink-dim, #93a1b4); border: none; border-radius: 0; font-family: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif; font-size: 14px; cursor: pointer; transition: color 100ms linear; } .ds-btn-quiet:hover { color: var(--color-ink, #e8edf5); } .ds-btn-quiet:focus-visible { outline: 2px solid var(--color-lamp-flow, #4c9dff); outline-offset: 2px; }"
+    },
+    {
+      "name": "Lamp",
+      "kind": "custom",
+      "refersTo": "lamp",
+      "description": "四色状态灯，颜色不单独承担信息，旁边总有文字",
+      "html": "<span class=\"ds-lamp-row\"><span class=\"ds-lamp ds-lamp-link\"></span><span class=\"ds-label\">跳线已接上</span></span>",
+      "css": ".ds-lamp-row { display: inline-flex; align-items: center; gap: 8px; } .ds-lamp { width: 10px; height: 10px; border-radius: 9999px; display: inline-block; } .ds-lamp-standby { background: var(--color-lamp-idle, #e0a63c); } .ds-lamp-link { background: var(--color-lamp-ready, #35d39a); } .ds-lamp-flow { background: var(--color-lamp-flow, #4c9dff); } .ds-lamp-fault { background: var(--color-lamp-fault, #e2604f); } .ds-label { font-family: 'Cascadia Mono', Consolas, ui-monospace, monospace; font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--color-ink-faint, #6b7788); }"
+    },
+    {
+      "name": "Port",
+      "kind": "custom",
+      "refersTo": "panel-face",
+      "description": "机位方块：已接上是面板钢底，未接上是虚线空插槽",
+      "html": "<section class=\"ds-port\"><p class=\"ds-port-name\">以太网</p><p class=\"ds-port-endpoint\">192.168.88.1</p></section>",
+      "css": ".ds-port { display: flex; flex-direction: column; gap: 8px; padding: 16px; background: var(--color-panel-face, #171d25); border: 1px solid var(--color-panel-edge, #232b36); border-radius: 0; } .ds-port-name { margin: 0; font-family: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif; font-size: 19px; font-weight: 600; letter-spacing: -0.01em; color: var(--color-ink, #e8edf5); } .ds-port-endpoint { margin: 0; font-family: 'Cascadia Mono', Consolas, ui-monospace, monospace; font-size: 13px; font-variant-numeric: tabular-nums; color: var(--color-ink-dim, #93a1b4); }"
+    },
+    {
+      "name": "Rail Row",
+      "kind": "custom",
+      "refersTo": "rail-row",
+      "description": "面板行：选择孔、名字、路径、读数与状态字",
+      "html": "<div class=\"ds-row\"><span class=\"ds-check ds-check-on\"></span><span class=\"ds-row-body\"><span class=\"ds-row-title\">示例游戏 A</span><span class=\"ds-row-meta\">steam · D:/SteamLibrary/example_a</span></span><span class=\"ds-row-reading\">64.0 GiB</span><span class=\"ds-row-state\">等待</span></div>",
+      "css": ".ds-row { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 10px 12px; background: color-mix(in oklab, var(--color-lamp-flow, #4c9dff) 10%, transparent); border-bottom: 1px solid color-mix(in oklab, var(--color-panel-edge, #232b36) 70%, transparent); border-radius: 0; font-family: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif; } .ds-check { width: 16px; height: 16px; flex-shrink: 0; background: var(--color-panel-hole, #0a0d11); border: 1px solid var(--color-panel-edge, #232b36); } .ds-check-on { background: var(--color-lamp-ready, #35d39a); border-color: var(--color-lamp-ready, #35d39a); } .ds-row-body { display: flex; flex-direction: column; min-width: 0; flex: 1; } .ds-row-title { font-size: 14px; color: var(--color-ink, #e8edf5); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .ds-row-meta { font-family: 'Cascadia Mono', Consolas, ui-monospace, monospace; font-size: 12px; color: var(--color-ink-faint, #6b7788); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .ds-row-reading { font-family: 'Cascadia Mono', Consolas, ui-monospace, monospace; font-size: 13px; font-variant-numeric: tabular-nums; color: var(--color-ink-dim, #93a1b4); } .ds-row-state { font-family: 'Cascadia Mono', Consolas, ui-monospace, monospace; font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--color-lamp-flow, #4c9dff); }"
+    },
+    {
+      "name": "Text Field",
+      "kind": "input",
+      "refersTo": "input-field",
+      "description": "孔位黑底的输入孔，聚焦时边框转流量蓝",
+      "html": "<input class=\"ds-input\" placeholder=\"目标文件夹，例如 D:\\\\Games\" />",
+      "css": ".ds-input { height: 36px; width: 100%; padding: 0 12px; background: var(--color-panel-hole, #0a0d11); color: var(--color-ink, #e8edf5); border: 1px solid var(--color-panel-edge, #232b36); border-radius: 0; font-family: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif; font-size: 14px; } .ds-input::placeholder { color: var(--color-ink-faint, #6b7788); } .ds-input:focus { outline: none; border-color: var(--color-lamp-flow, #4c9dff); }"
+    },
+    {
+      "name": "Patch Cord",
+      "kind": "custom",
+      "refersTo": "patch-cord",
+      "description": "两端之间唯一的可视连接，只走 45° 与 90°",
+      "html": "<svg class=\"ds-cord\" viewBox=\"0 0 200 60\" preserveAspectRatio=\"none\" aria-hidden=\"true\"><path d=\"M0 30 H70 L95 8 H130 L155 30 H200\" fill=\"none\" stroke=\"var(--color-lamp-flow, #4c9dff)\" stroke-width=\"2\" /></svg>",
+      "css": ".ds-cord { display: block; width: 100%; height: 64px; }"
+    },
+    {
+      "name": "Status Strip",
+      "kind": "custom",
+      "refersTo": "status-strip",
+      "description": "贴地一条：一颗灯、一句此刻该做的事、最右一个主按键",
+      "html": "<footer class=\"ds-strip\"><span class=\"ds-lamp ds-lamp-standby\"></span><span class=\"ds-strip-text\">把跳线接到对端：点「找对端」</span><span class=\"ds-strip-spacer\"></span><span class=\"ds-strip-action\">去选内容</span></footer>",
+      "css": ".ds-strip { display: flex; align-items: center; gap: 16px; min-height: 44px; padding: 8px 20px; background: var(--color-panel-rail, #0d1116); border-top: 1px solid var(--color-panel-edge, #232b36); font-family: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif; font-size: 13px; color: var(--color-ink-dim, #93a1b4); } .ds-strip-spacer { flex: 1; } .ds-strip-action { display: inline-flex; align-items: center; height: 32px; padding: 0 12px; background: var(--color-lamp-flow, #4c9dff); color: var(--color-panel-hole, #0a0d11); font-size: 13px; font-weight: 500; } .ds-strip .ds-lamp-standby { background: var(--color-lamp-idle, #e0a63c); } .ds-strip .ds-lamp { width: 10px; height: 10px; border-radius: 9999px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "THE RACK PANEL",
+    "overview": "界面是一块机房配线架：左边一个机位是本机，右边一个机位是对端，中间一根跳线就是链路。所有状态都落在孔位上的灯里，所有动作都是插拔，没有第二套隐喻。表达让位于任务。这块面板上没有卡片、没有阴影、没有圆角，也没有装饰插图；深度来自机架、面板、孔位三层色阶与 1px 缝线，节奏来自端口之间的留白。一屏之内同时出现的灯不超过四颗，颜色本身就是状态：待命、链路就绪、正在搬运、出错。界面只在必要的地方有物理感：按键是孔位上的一个实体方块，选中的行在面板上亮起一层薄蓝，跳线是 2px 的折线。文字说人话，读数与图形同源——剩余时间有多长，行内那一条就走多长。",
+    "keyCharacteristics": [
+      "直角、无阴影、无卡片，深度靠色阶与缝线",
+      "四色灯承担全部状态，颜色有唯一含义",
+      "等宽表格数字承担所有读数，数字不会跳动",
+      "跳线只走 45° 与 90°，是两端之间唯一的可视连接",
+      "一个面板上只有一个主按键"
+    ],
+    "rules": [
+      { "name": "The Four-Lamp Rule", "body": "灯只有四种颜色，一种颜色只表示一种状态；需要第五种状态时改文案，不加颜色。", "section": "colors" },
+      { "name": "The One Switch Rule", "body": "一屏只有一个主按键，任何时候用户只需回答“下一步是什么”。", "section": "colors" },
+      { "name": "The Seam Rule", "body": "边界一律是 1px 的缝线灰；禁止彩色左边框、粗线强调与发光描边。", "section": "colors" },
+      { "name": "The Tabular Rule", "body": "所有数字都是等宽表格数字，变化时不允许左右跳动。", "section": "typography" },
+      { "name": "The Two-Line Rule", "body": "面板行最多两行：名字一行，路径或平台一行；第三行说明放到底部状态条。", "section": "typography" },
+      { "name": "The Flat-By-Default Rule", "body": "任何元素在静止状态都没有阴影；需要区分层级时改底色，不加投影。", "section": "elevation" }
+    ],
+    "dos": [
+      "Do 把状态放进四色灯里，并让灯旁边永远有文字。",
+      "Do 用等宽表格数字承担所有读数（13px，字距 0.02em）。",
+      "Do 让进度带的长度与剩余时间同源，读数与图形一起变。",
+      "Do 用 1px 缝线灰划边界，用底色深浅表达层级。",
+      "Do 让接收方在同意之前看不到任何落盘结果，界面文案也要说清这一点。"
+    ],
+    "donts": [
+      "Don't 使用圆角、卡片、阴影或玻璃模糊。",
+      "Don't 引入第五种信号色，也不要用颜色单独表达状态。",
+      "Don't 为“游戏工具”的类别默认服务：不要封面墙、不要启动器式的横幅、不要装饰插图。",
+      "Don't 堆术语，界面上不出现 SMB、ACL、子网掩码这类词。",
+      "Don't 让状态被视觉遮蔽：速率、剩余时间与文件路径必须始终在场。",
+      "Don't 在同一屏放两个主按键，也不要让主按键离开底部状态条或它的动作位置。"
+    ]
+  }
+}

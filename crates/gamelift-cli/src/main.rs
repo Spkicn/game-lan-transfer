@@ -19,6 +19,8 @@
 use std::io::Write as _;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -278,18 +280,22 @@ fn peers_cmd(args: &[String]) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<20} {:<24} {:<10} {:>12}  配对",
+        "{:<20} {:<28} {:<10} {:>12}  配对",
         "名称", "地址", "平台", "可用空间"
     );
     for peer in peers {
-        let address = format!("{}:{}", peer.addr, peer.session_port);
+        let address = if peer.session_port == 0 {
+            format!("{}（仅接收）", peer.addr)
+        } else {
+            format!("{}:{}", peer.addr, peer.session_port)
+        };
         let pairing = if peer.pairing_required {
             "需要"
         } else {
             "不需要"
         };
         println!(
-            "{:<20} {:<24} {:<10} {:>12}  {pairing}",
+            "{:<20} {:<28} {:<10} {:>12}  {pairing}",
             peer.name,
             address,
             peer.platform,
@@ -395,16 +401,26 @@ fn recv_cmd(args: &[String]) -> Result<()> {
         "从 {peer_ip}:{port} 接收 {want}，目标 {}，并发 {streams}",
         dest_parent.display()
     );
+    let announce_stop = match receiver_announcer(&dest_parent, flag_value(args, "--iface")) {
+        Ok(stop) => Some(stop),
+        Err(err) => {
+            eprintln!("提示: 未启动发现广播，不影响本次接收: {err}");
+            None
+        }
+    };
     let mut last: Option<Instant> = None;
-    let outcome = client::recv(&options, &mut |stats| {
+    let received = client::recv(&options, &mut |stats| {
         let due = last.is_none_or(|mark| mark.elapsed() >= Duration::from_secs(1));
         if due {
             last = Some(Instant::now());
             print!("\r{}", progress_line(stats));
             let _ = std::io::stdout().flush();
         }
-    })
-    .context("接收失败")?;
+    });
+    if let Some(stop) = announce_stop {
+        stop.store(true, Ordering::Relaxed);
+    }
+    let outcome = received.context("接收失败")?;
     println!();
     println!(
         "已接收 {} → {}",
@@ -499,6 +515,34 @@ fn resolve_iface(explicit: Option<&str>) -> Result<IpAddr> {
     })?;
     text.parse()
         .with_context(|| format!("无法解析网口地址: {text}"))
+}
+
+/// 接收期间广播自己的存在，便于源端用 `gamelift peers` 看到目标机与可用空间
+fn receiver_announcer(dest_parent: &Path, iface: Option<&str>) -> Result<Arc<AtomicBool>> {
+    let local_ip = resolve_iface(iface)?;
+    let socket = discovery::bind(local_ip, 0).context("创建广播套接字失败")?;
+    let peer = Peer {
+        instance: discovery::new_instance(),
+        name: discovery::local_name(),
+        addr: local_ip,
+        session_port: 0,
+        platform: discovery::local_platform(),
+        free_bytes: link::free_bytes_at(dest_parent).unwrap_or(0),
+        pairing_required: true,
+    };
+    let broadcast = broadcast_target(local_ip);
+    let stop = Arc::new(AtomicBool::new(false));
+    let thread_stop = Arc::clone(&stop);
+    thread::Builder::new()
+        .name("gamelift-announce".to_owned())
+        .spawn(move || {
+            while !thread_stop.load(Ordering::Relaxed) {
+                let _ = discovery::announce_to(&socket, broadcast, &peer);
+                thread::sleep(Duration::from_secs(1));
+            }
+        })
+        .context("启动广播线程失败")?;
+    Ok(stop)
 }
 
 /// 广播目标地址

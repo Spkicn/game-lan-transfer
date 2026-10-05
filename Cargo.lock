@@ -965,7 +965,7 @@ dependencies = [
 
 [[package]]
 name = "gamelift-cli"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "gamelift-core",
@@ -974,7 +974,7 @@ dependencies = [
 
 [[package]]
 name = "gamelift-core"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "blake3",
  "fastcdc",
@@ -987,7 +987,7 @@ dependencies = [
 
 [[package]]
 name = "gamelift-desktop"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "gamelift-core",
  "gamelift-launchers",
@@ -999,7 +999,7 @@ dependencies = [
 
 [[package]]
 name = "gamelift-launchers"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "gamelift-core",
  "serde",

@@ -1,7 +1,7 @@
 {
   "name": "gamelift-desktop",
   "private": true,
-  "version": "0.1.2",
+  "version": "0.2.0",
   "type": "module",
   "description": "GameLift 桌面应用前端",
   "scripts": {

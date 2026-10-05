@@ -201,6 +201,16 @@ pub fn free_bytes(drive: &str) -> Result<u64> {
         .map_err(|e| Error::Io(format!("查询 {root} 可用空间失败: {e}")))
 }
 
+/// 路径所在卷的剩余空间，单位字节
+///
+/// # Errors
+///
+/// 路径不存在或查询失败时返回 [`Error::Io`]
+pub fn free_bytes_at(path: &std::path::Path) -> Result<u64> {
+    fs4::free_space(path)
+        .map_err(|e| Error::Io(format!("查询 {} 可用空间失败: {e}", path.display())))
+}
+
 #[cfg(test)]
 #[allow(clippy::expect_used)]
 mod tests {

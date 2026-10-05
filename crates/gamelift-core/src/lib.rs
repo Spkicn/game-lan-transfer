@@ -5,6 +5,7 @@
 
 pub mod link;
 pub mod manifest;
+pub mod net;
 pub mod transfer;
 
 /// crate 级错误类型，库 crate 一律用 thiserror 且禁止跨边界传 String
@@ -29,6 +30,26 @@ pub enum Error {
     /// IO 错误
     #[error("IO 错误: {0}")]
     Io(String),
+
+    /// 协议交互失败，涵盖版本不匹配与非法消息
+    #[error("协议错误: {0}")]
+    Protocol(String),
+
+    /// 配对码不匹配，源端拒绝本次会话
+    #[error("配对码不匹配，请核对源端给出的 6 位数字")]
+    PairingRejected,
+
+    /// 对端声明的路径越出目标根目录
+    #[error("路径越界，已拒绝: {0}")]
+    PathEscape(String),
+
+    /// 分块校验失败
+    #[error("分块校验失败: {0}")]
+    Checksum(String),
+
+    /// 调用方取消传输，续传状态会保留
+    #[error("传输已取消，续传状态已保留")]
+    Cancelled,
 }
 
 /// 便捷 Result 别名

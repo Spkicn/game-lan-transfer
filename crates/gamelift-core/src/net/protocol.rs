@@ -39,6 +39,17 @@ pub enum RejectKind {
     Source,
 }
 
+/// 请求里的一件待传内容
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RequestItem {
+    /// 顶层名字，落盘后就是这个名字
+    pub name: String,
+    /// 是否为文件夹
+    pub is_dir: bool,
+    /// 字节数
+    pub bytes: u64,
+}
+
 /// 控制消息
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -87,6 +98,30 @@ pub enum Message {
         /// 拒绝原因
         kind: RejectKind,
         /// 面向用户的说明
+        message: String,
+    },
+    /// 发送方发起的一次传输请求，接收方决定落盘位置
+    TransferRequest {
+        /// 发送方主机名
+        sender_name: String,
+        /// 待传内容清单
+        items: Vec<RequestItem>,
+        /// 内容总字节数
+        total_bytes: u64,
+        /// 发送方传输服务端口
+        transfer_port: u16,
+        /// 配对码，接收方要求时必填
+        pairing: Option<String>,
+        /// 拉取时使用的内容名
+        want: String,
+    },
+    /// 接收方对传输请求的答复
+    TransferDecision {
+        /// 是否同意
+        accepted: bool,
+        /// 同意时的目标目录
+        dest: Option<String>,
+        /// 面向发送方的说明
         message: String,
     },
 }

@@ -332,6 +332,7 @@ fn host_cmd(args: &[String]) -> Result<()> {
     let free_bytes = link::free_bytes_at(&root).unwrap_or(0);
     let host = server::Host::start(HostOptions {
         root: root.clone(),
+        extra_roots: Vec::new(),
         bind: SocketAddr::new(bind_ip, port),
         pairing: Some(pairing.clone()),
         title: title.clone(),
@@ -402,6 +403,7 @@ fn recv_cmd(args: &[String]) -> Result<()> {
         cancel: None,
         force: has_flag(args, "--force"),
         old_root: old_root.clone(),
+        layout: client::Layout::Wrapper,
     };
     println!(
         "从 {peer_ip}:{port} 接收 {want}（{}，{} 个文件），目标 {}",

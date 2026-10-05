@@ -11,11 +11,12 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use gamelift_core::net::client::{recv, RecvOptions};
+use gamelift_core::net::client::{recv, Layout, RecvOptions};
 use gamelift_core::net::frame::{read_frame, write_frame, Frame};
-use gamelift_core::net::protocol::{self, FileEntry, Message};
+use gamelift_core::net::protocol::{self, FileEntry, Message, RequestItem};
 use gamelift_core::net::resume::{self, FileState, TransferState};
-use gamelift_core::net::server::{Host, HostOptions};
+use gamelift_core::net::server::{ExtraRoot, Host, HostOptions};
+use gamelift_core::net::session::{self, Decision, RequestListener, TransferRequest};
 use gamelift_core::{Error, Result};
 
 /// 测试端口分配器，单调递增避免并行用例抢占同一端口
@@ -62,6 +63,7 @@ fn read_file(path: &Path) -> Vec<u8> {
 fn host_options(root: &Path, port: u16, chunk_bytes: u32) -> HostOptions {
     HostOptions {
         root: root.to_path_buf(),
+        extra_roots: Vec::new(),
         bind: addr(port),
         pairing: None,
         title: "示例游戏".to_owned(),
@@ -85,6 +87,7 @@ fn recv_options(peer: SocketAddr, dest: &Path, chunk_bytes: u32) -> RecvOptions 
         cancel: None,
         force: false,
         old_root: None,
+        layout: Layout::Wrapper,
     }
 }
 
@@ -542,6 +545,95 @@ fn small_update_transfers_under_ten_percent() {
         second.bytes_received * 10 < total,
         "会话内接收量也应低于全量 10%"
     );
+    host.shutdown();
+    let _ = std::fs::remove_dir_all(&src);
+    let _ = std::fs::remove_dir_all(&dest);
+}
+
+#[test]
+fn multiple_roots_land_into_chosen_folder() {
+    let src = temp_dir("roots-src");
+    let extra = temp_dir("roots-extra");
+    let payload = pattern(4096);
+    std::fs::write(src.join("a.bin"), &payload).expect("write");
+    std::fs::write(extra.join("b.bin"), pattern(1024)).expect("write");
+
+    let mut host_config = host_options(&src, free_port(), 64 * 1024);
+    host_config.extra_roots = vec![ExtraRoot {
+        name: "文档".to_owned(),
+        path: extra.clone(),
+    }];
+    let mut host = Host::start(host_config).expect("host");
+
+    let dest = temp_dir("roots-dest");
+    let mut options = recv_options(host.local_addr(), &dest, 64 * 1024);
+    options.layout = Layout::IntoDestination;
+    let outcome = recv(&options, &mut |_| {}).expect("recv");
+
+    assert_eq!(outcome.root, dest, "内容应直接落到选定目录");
+    assert_eq!(read_file(&dest.join("a.bin")), payload);
+    assert_eq!(read_file(&dest.join("文档").join("b.bin")).len(), 1024);
+    assert!(
+        !dest.join(".gamelift-part-demo").exists(),
+        "暂存目录应被清理"
+    );
+    host.shutdown();
+    let _ = std::fs::remove_dir_all(&src);
+    let _ = std::fs::remove_dir_all(&extra);
+    let _ = std::fs::remove_dir_all(&dest);
+}
+
+#[test]
+fn request_then_approve_then_transfer() {
+    let src = temp_dir("flow-src");
+    let payload = pattern(8192);
+    std::fs::write(src.join("payload.bin"), &payload).expect("write");
+
+    let mut host_config = host_options(&src, free_port(), 64 * 1024);
+    host_config.pairing = Some("424242".to_owned());
+    let mut host = Host::start(host_config).expect("host");
+
+    let mut listener =
+        RequestListener::start(addr(free_port()), Some("424242".to_owned())).expect("listen");
+
+    let request = TransferRequest {
+        sender_name: "laptop".to_owned(),
+        items: vec![RequestItem {
+            name: "demo".to_owned(),
+            is_dir: true,
+            bytes: payload.len() as u64,
+        }],
+        total_bytes: payload.len() as u64,
+        transfer_port: host.local_addr().port(),
+        pairing: Some("424242".to_owned()),
+        want: "demo".to_owned(),
+    };
+    let peer = listener.local_addr();
+    let sender = thread::spawn(move || {
+        session::request_transfer(peer, &request, Duration::from_secs(10)).expect("send")
+    });
+
+    let incoming = listener.poll(Duration::from_secs(5)).expect("incoming");
+    assert_eq!(incoming.request.sender_name, "laptop");
+    assert_eq!(incoming.request.total_bytes, payload.len() as u64);
+
+    let dest = temp_dir("flow-dest");
+    let approved = Decision::Approve {
+        dest: dest.to_string_lossy().into_owned(),
+    };
+    listener.respond(incoming.id, &approved).expect("respond");
+    assert_eq!(sender.join().expect("join"), approved);
+
+    // 接收方按批准的目标目录拉取，发送方地址取自请求来源
+    let sender_addr = SocketAddr::new(incoming.from.ip(), incoming.request.transfer_port);
+    let mut options = recv_options(sender_addr, &dest, 64 * 1024);
+    options.pairing = Some("424242".to_owned());
+    options.layout = Layout::IntoDestination;
+    let outcome = recv(&options, &mut |_| {}).expect("recv");
+    assert_eq!(outcome.root, dest);
+    assert_eq!(read_file(&dest.join("payload.bin")), payload);
+
+    listener.shutdown();
     host.shutdown();
     let _ = std::fs::remove_dir_all(&src);
     let _ = std::fs::remove_dir_all(&dest);

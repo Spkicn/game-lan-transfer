@@ -260,6 +260,7 @@ fn start_host(
     );
     let host = server::Host::start(HostOptions {
         root: root.clone(),
+        extra_roots: Vec::new(),
         bind: SocketAddr::new(ip, net::DEFAULT_SESSION_PORT),
         pairing: Some(pairing.clone()),
         title: title.clone(),
@@ -344,6 +345,7 @@ fn start_recv(
         cancel: Some(Arc::clone(&cancel)),
         force,
         old_root,
+        layout: client::Layout::Wrapper,
     };
     let mut last = Instant::now();
     let outcome = client::recv(&options, &mut |stats| {

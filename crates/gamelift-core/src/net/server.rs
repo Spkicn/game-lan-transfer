@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -24,6 +24,8 @@ use super::{DIGEST_BYTES, IO_POLL_INTERVAL};
 pub struct HostOptions {
     /// 要暴露的根目录
     pub root: PathBuf,
+    /// 附加内容根，目标端看到的是各自的 `<名字>/` 这一层；为空时行为与单根完全一致
+    pub extra_roots: Vec<ExtraRoot>,
     /// 监听地址，必须是明确的直连地址
     pub bind: SocketAddr,
     /// 配对码，`None` 表示不校验
@@ -38,6 +40,15 @@ pub struct HostOptions {
     pub claim_files: Vec<ClaimFile>,
     /// 分块大小
     pub chunk_bytes: u32,
+}
+
+/// 一个附加内容根，用于一次搬运多份互不相干的文件夹或文件
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtraRoot {
+    /// 顶层名字，必须是单个路径段
+    pub name: String,
+    /// 本机路径，可以是文件也可以是目录
+    pub path: PathBuf,
 }
 
 /// 源端对外暴露的一个文件
@@ -86,13 +97,24 @@ impl Host {
                 "源端必须绑定明确的直连地址，不能监听全部接口".to_owned(),
             ));
         }
-        if !options.root.is_dir() {
+        if !options.root.is_dir() && !options.root.is_file() {
             return Err(Error::Io(format!(
                 "源目录不存在: {}",
                 options.root.display()
             )));
         }
-        let files = collect_files(&options.root)?;
+        for extra in &options.extra_roots {
+            if sanitize_relative(&extra.name).is_err() {
+                return Err(Error::PathEscape(extra.name.clone()));
+            }
+            if !extra.path.exists() {
+                return Err(Error::Io(format!(
+                    "附加内容不存在: {}",
+                    extra.path.display()
+                )));
+            }
+        }
+        let files = collect_files(&options)?;
         if files.is_empty() {
             return Err(Error::Io("源目录里没有可传输的文件".to_owned()));
         }
@@ -161,13 +183,40 @@ impl Drop for Host {
     }
 }
 
-/// 递归收集根目录下的普通文件
+/// 递归收集全部内容根下的普通文件，附加根带 `<名字>/` 前缀
 ///
 /// # Errors
 ///
 /// 目录不可读时返回 [`Error::Io`]
-fn collect_files(root: &Path) -> Result<Vec<ServedFile>> {
+fn collect_files(options: &HostOptions) -> Result<Vec<ServedFile>> {
     let mut out = Vec::new();
+    walk_into(&options.root, "", &mut out)?;
+    for extra in &options.extra_roots {
+        walk_into(&extra.path, &extra.name, &mut out)?;
+    }
+    out.sort_by(|left, right| left.relative.cmp(&right.relative));
+    Ok(out)
+}
+
+/// 把一个根下的普通文件收进清单，`prefix` 非空时加一层顶层名字
+fn walk_into(root: &Path, prefix: &str, out: &mut Vec<ServedFile>) -> Result<()> {
+    // 单个文件也能作为内容根
+    if root.is_file() {
+        let name = if prefix.is_empty() {
+            root.file_name().map_or_else(
+                || "file".to_owned(),
+                |name| name.to_string_lossy().into_owned(),
+            )
+        } else {
+            prefix.to_owned()
+        };
+        let size = std::fs::metadata(root).map_or(0, |meta| meta.len());
+        out.push(ServedFile {
+            relative: name,
+            size,
+        });
+        return Ok(());
+    }
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
         let entries = std::fs::read_dir(&dir)
@@ -190,20 +239,26 @@ fn collect_files(root: &Path) -> Result<Vec<ServedFile>> {
             if !metadata.is_file() {
                 continue;
             }
-            let Ok(stripped) = path.strip_prefix(root) else {
-                continue;
-            };
-            let Some(relative) = stripped.to_str() else {
+            let Some(relative) = relative_name(&path, root, prefix) else {
                 continue;
             };
             out.push(ServedFile {
-                relative: relative.replace('\\', "/"),
+                relative,
                 size: metadata.len(),
             });
         }
     }
-    out.sort_by(|left, right| left.relative.cmp(&right.relative));
-    Ok(out)
+    Ok(())
+}
+
+/// 把路径转成清单里的相对路径，`prefix` 非空时作为顶层名字
+fn relative_name(path: &Path, root: &Path, prefix: &str) -> Option<String> {
+    let relative = path.strip_prefix(root).ok()?.to_str()?.replace('\\', "/");
+    Some(if prefix.is_empty() {
+        relative
+    } else {
+        format!("{prefix}/{relative}")
+    })
 }
 
 /// 根目录名，取不到时退回固定名
@@ -320,8 +375,7 @@ fn serve_diff(writer: &mut impl Write, session: &Arc<Session>, payload: &[u8]) -
     else {
         return send_rejected(writer, RejectKind::NotFound, "文件下标越界");
     };
-    let relative = sanitize_relative(&entry.relative)?;
-    let path = join_within(&session.options.root, &relative)?;
+    let path = resolve_path(&session.options, entry.relative.as_str())?;
     let source = match diff::index_file(&path) {
         Ok(source) => source,
         Err(err) => return send_rejected(writer, RejectKind::Source, &err.to_string()),
@@ -339,6 +393,28 @@ fn serve_diff(writer: &mut impl Write, session: &Arc<Session>, payload: &[u8]) -
             payload: diff::encode_plan(file, &plan),
         },
     )
+}
+
+/// 把清单里的相对路径解析到实际文件，附加根按顶层名字优先匹配
+///
+/// # Errors
+///
+/// 路径非法或越出内容根时返回错误
+fn resolve_path(options: &HostOptions, relative: &str) -> Result<PathBuf> {
+    let sanitized = sanitize_relative(relative)?;
+    let mut components = sanitized.components();
+    if let Some(Component::Normal(first)) = components.next() {
+        if let Some(name) = first.to_str() {
+            if let Some(extra) = options.extra_roots.iter().find(|root| root.name == name) {
+                let rest: PathBuf = components.collect();
+                if rest.as_os_str().is_empty() {
+                    return Ok(extra.path.clone());
+                }
+                return join_within(&extra.path, &rest);
+            }
+        }
+    }
+    join_within(&options.root, &sanitized)
 }
 
 /// 下发一个分块，负载为 `blake3` 摘要加数据
@@ -359,8 +435,7 @@ fn serve_chunk(
     if len == 0 || len > super::MAX_CHUNK_BYTES || offset.saturating_add(length) > entry.size {
         return send_rejected(writer, RejectKind::NotFound, "分块范围非法");
     }
-    let relative = sanitize_relative(&entry.relative)?;
-    let path = join_within(&session.options.root, &relative)?;
+    let path = resolve_path(&session.options, entry.relative.as_str())?;
     let data = match read_chunk(&path, offset, len) {
         Ok(data) => data,
         Err(err) => {
@@ -465,6 +540,7 @@ mod tests {
     fn options(root: PathBuf, bind: SocketAddr) -> HostOptions {
         HostOptions {
             root,
+            extra_roots: Vec::new(),
             bind,
             pairing: None,
             title: "示例".to_owned(),
@@ -481,9 +557,49 @@ mod tests {
         std::fs::create_dir_all(root.join("bin/win64")).expect("mkdir");
         std::fs::write(root.join("bin/win64/game.exe"), b"x").expect("write");
         std::fs::write(root.join("readme.txt"), b"y").expect("write");
-        let files = collect_files(&root).expect("walk");
+        let files = collect_files(&options(
+            root.clone(),
+            SocketAddr::from(([127, 0, 0, 1], 0)),
+        ))
+        .expect("walk");
         let paths: Vec<&str> = files.iter().map(|file| file.relative.as_str()).collect();
         assert_eq!(paths, vec!["bin/win64/game.exe", "readme.txt"]);
+        std::fs::remove_dir_all(&root).expect("cleanup");
+    }
+
+    #[test]
+    fn extra_roots_are_prefixed_and_resolved() {
+        let root = temp_dir("multi-root");
+        let extra_dir = temp_dir("multi-extra");
+        std::fs::write(root.join("a.bin"), b"primary").expect("write");
+        std::fs::write(extra_dir.join("b.bin"), b"extra").expect("write");
+        let mut host_options = options(root.clone(), SocketAddr::from(([127, 0, 0, 1], 0)));
+        host_options.extra_roots = vec![ExtraRoot {
+            name: "附加".to_owned(),
+            path: extra_dir.clone(),
+        }];
+        let files = collect_files(&host_options).expect("walk");
+        let paths: Vec<&str> = files.iter().map(|file| file.relative.as_str()).collect();
+        assert_eq!(paths, vec!["a.bin", "附加/b.bin"]);
+        let resolved = resolve_path(&host_options, "附加/b.bin").expect("resolve");
+        assert_eq!(resolved, extra_dir.join("b.bin"));
+        let primary = resolve_path(&host_options, "a.bin").expect("resolve");
+        assert_eq!(primary, root.join("a.bin"));
+        std::fs::remove_dir_all(&root).expect("cleanup");
+        std::fs::remove_dir_all(&extra_dir).expect("cleanup");
+    }
+
+    #[test]
+    fn single_file_root_is_served_by_name() {
+        let root = temp_dir("single-file");
+        let file = root.join("payload.bin");
+        std::fs::write(&file, b"data").expect("write");
+        let mut host_options = options(root.clone(), SocketAddr::from(([127, 0, 0, 1], 0)));
+        host_options.root = file.clone();
+        let files = collect_files(&host_options).expect("walk");
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].relative, "payload.bin");
+        assert_eq!(files[0].size, 4);
         std::fs::remove_dir_all(&root).expect("cleanup");
     }
 

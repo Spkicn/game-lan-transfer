@@ -16,6 +16,7 @@ pub mod paths;
 pub mod protocol;
 pub mod resume;
 pub mod server;
+pub mod session;
 
 /// 分块默认大小，4 MiB
 pub const DEFAULT_CHUNK_BYTES: u32 = 4 * 1024 * 1024;

@@ -42,6 +42,16 @@ const STATE_FLUSH_INTERVAL: Duration = Duration::from_secs(2);
 /// 空间预检余量
 const SPACE_MARGIN: u64 = 512 * 1024 * 1024;
 
+/// 内容落盘布局
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Layout {
+    /// 内容先落暂存目录，整体改名为 `<目标父目录>/<内容根名>`，保持既有语义
+    #[default]
+    Wrapper,
+    /// 内容先落暂存目录，再把顶层条目逐个移入目标目录，用于"直接落到我选的文件夹"
+    IntoDestination,
+}
+
 /// 接收参数
 #[derive(Debug, Clone)]
 pub struct RecvOptions {
@@ -65,6 +75,8 @@ pub struct RecvOptions {
     pub force: bool,
     /// 目标机上已有副本的根目录，给出后启用差异传输
     pub old_root: Option<PathBuf>,
+    /// 内容落盘布局
+    pub layout: Layout,
 }
 
 /// 接收结果
@@ -197,7 +209,9 @@ pub fn recv(
     let final_root = join_within(&options.dest_parent, &root_name)?;
     let state_path = resume::state_path(&options.dest_parent, &manifest.root_name);
     std::fs::create_dir_all(&options.dest_parent).map_err(io_error)?;
-    check_existing(options, &final_root)?;
+    if options.layout == Layout::Wrapper {
+        check_existing(options, &final_root)?;
+    }
     check_space(&options.dest_parent, manifest.total_bytes)?;
 
     let plans = plan_diff(&mut control, options, &manifest)?;
@@ -329,16 +343,70 @@ fn finish(
     done: u64,
 ) -> Result<RecvOutcome> {
     verify_staged(staging, &session.manifest.files)?;
-    commit(staging, final_root)?;
+    let root = match options.layout {
+        Layout::Wrapper => {
+            commit(staging, final_root)?;
+            final_root.to_path_buf()
+        }
+        Layout::IntoDestination => {
+            commit_entries(staging, &options.dest_parent, options.force)?;
+            options.dest_parent.clone()
+        }
+    };
     let claim_files = write_claim_files(options, &session.manifest.claim_files)?;
     TransferState::remove(&session.state_path)?;
     Ok(RecvOutcome {
-        root: final_root.to_path_buf(),
+        root,
         bytes_received: received,
         bytes_total: session.manifest.total_bytes,
         bytes_resumed: done.saturating_sub(received),
         claim_files,
     })
+}
+
+/// 把暂存目录里的顶层条目逐个移入目标目录，同名冲突按 `force` 处理
+fn commit_entries(staging: &Path, destination: &Path, force: bool) -> Result<()> {
+    let entries: Vec<PathBuf> = std::fs::read_dir(staging)
+        .map_err(io_error)?
+        .flatten()
+        .map(|entry| entry.path())
+        .collect();
+    if !force {
+        for path in &entries {
+            let target = destination.join(path.file_name().unwrap_or_default());
+            if target.exists() {
+                return Err(Error::Io(format!(
+                    "目标位置已有同名内容: {}，确认覆盖请加 --force",
+                    target.display()
+                )));
+            }
+        }
+    }
+    for path in &entries {
+        let target = destination.join(path.file_name().unwrap_or_default());
+        if target.exists() {
+            let backup = target.with_file_name(format!(
+                ".gamelift-old-{}",
+                path.file_name().map_or_else(
+                    || "item".to_owned(),
+                    |name| name.to_string_lossy().into_owned()
+                )
+            ));
+            let _ = std::fs::remove_dir_all(&backup);
+            let _ = std::fs::remove_file(&backup);
+            std::fs::rename(&target, &backup).map_err(io_error)?;
+            if let Err(err) = std::fs::rename(path, &target) {
+                let _ = std::fs::rename(&backup, &target);
+                return Err(Error::Io(format!("移入 {} 失败: {err}", target.display())));
+            }
+            let _ = std::fs::remove_dir_all(&backup);
+        } else {
+            std::fs::rename(path, &target)
+                .map_err(|err| Error::Io(format!("移入 {} 失败: {err}", target.display())))?;
+        }
+    }
+    let _ = std::fs::remove_dir_all(staging);
+    Ok(())
 }
 
 /// 目标目录已存在时必须显式允许覆盖，真正的替换放到提交阶段

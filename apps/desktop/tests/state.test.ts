@@ -8,6 +8,7 @@ import {
   pickedItems,
   reduce,
   rowState,
+  transferComplete,
   type GameEntry,
   type PeerEntry,
 } from '../src/lib/state';
@@ -135,5 +136,43 @@ describe('三阶段状态机', () => {
       },
     });
     expect(rowState(state)).toBe('done');
+  });
+
+  it('对端同意后传输仍在进行，被拒才算结束', () => {
+    const approved = reduce(initialState, {
+      type: 'send-result',
+      result: { port: 27101, approved: true, dest: 'D:/Games', message: '' },
+    });
+    expect(approved.running).toBe(true);
+    const rejected = reduce(initialState, {
+      type: 'send-result',
+      result: { port: 27101, approved: false, dest: null, message: '不同意' },
+    });
+    expect(rejected.running).toBe(false);
+  });
+
+  it('发送方按进度判断完成，不依赖接收结果', () => {
+    let state = reduce(initialState, { type: 'running', running: true });
+    expect(transferComplete(state)).toBe(false);
+    state = reduce(state, {
+      type: 'progress',
+      progress: { bytes_done: 1024, bytes_total: 4096, bytes_per_sec: 512, fraction: 0.25 },
+    });
+    expect(transferComplete(state)).toBe(false);
+    expect(rowState(state)).toBe('flowing');
+    state = reduce(state, {
+      type: 'progress',
+      progress: { bytes_done: 4096, bytes_total: 4096, bytes_per_sec: 512, fraction: 1 },
+    });
+    expect(transferComplete(state)).toBe(true);
+    expect(rowState(state)).toBe('done');
+  });
+
+  it('总量为零不当作完成', () => {
+    const state = reduce(initialState, {
+      type: 'progress',
+      progress: { bytes_done: 0, bytes_total: 0, bytes_per_sec: 0, fraction: 0 },
+    });
+    expect(transferComplete(state)).toBe(false);
   });
 });

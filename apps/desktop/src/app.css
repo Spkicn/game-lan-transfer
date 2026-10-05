@@ -5,11 +5,12 @@
   --color-panel: #12161c;
   --color-panel-rail: #0d1116;
   --color-panel-edge: #232b36;
+  --color-panel-rim: #7a8594;
   --color-panel-face: #171d25;
   --color-panel-hole: #0a0d11;
   --color-ink: #e8edf5;
   --color-ink-dim: #93a1b4;
-  --color-ink-faint: #6b7788;
+  --color-ink-faint: #7a8594;
   --color-lamp-idle: #e0a63c;
   --color-lamp-ready: #35d39a;
   --color-lamp-flow: #4c9dff;
@@ -48,8 +49,7 @@
   }
 
   * {
-    scrollbar-color: var(--color-panel-edge) transparent;
-    scrollbar-width: thin;
+    scrollbar-color: var(--color-panel-rim) transparent;
   }
 
   ::-webkit-scrollbar {
@@ -58,13 +58,13 @@
   }
 
   ::-webkit-scrollbar-thumb {
-    background: var(--color-panel-edge);
+    background: var(--color-panel-rim);
     border: 3px solid transparent;
     background-clip: content-box;
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    background: color-mix(in oklab, var(--color-lamp-flow) 45%, var(--color-panel-edge));
+    background: var(--color-lamp-flow);
     background-clip: content-box;
   }
 
@@ -100,8 +100,12 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .flap {
-      animation: none;
+    *,
+    *::before,
+    *::after {
+      animation-duration: 1ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 1ms !important;
     }
   }
 }

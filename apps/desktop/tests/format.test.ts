@@ -58,8 +58,9 @@ describe('formatEta', () => {
 });
 
 describe('percent', () => {
-  it('总数为零视为已完成', () => {
-    expect(percent(0, 0)).toBe(100);
+  it('总量未知时不画进度，避免出现满格假象', () => {
+    expect(percent(0, 0)).toBe(0);
+    expect(percent(0, Number.NaN)).toBe(0);
   });
 
   it('夹在 0 到 100 之间', () => {

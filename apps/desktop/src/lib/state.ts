@@ -240,7 +240,12 @@ export function reduce(state: AppState, action: Action): AppState {
     case 'sent':
       return { ...state, sentBytes: action.bytes };
     case 'send-result':
-      return { ...state, sendResult: action.result, running: false };
+      return {
+        ...state,
+        sendResult: action.result,
+        // 对端同意后传输还在继续，只有被拒才算这一单结束
+        running: action.result?.approved === true,
+      };
     case 'finished':
       return { ...state, finished: action.summary, running: false };
     case 'transfer-plan':
@@ -300,9 +305,18 @@ export function pickedItems(state: AppState): TransferItem[] {
   });
 }
 
+/** 这一单是否已经搬完，接收方看结果，发送方看进度 */
+export function transferComplete(state: AppState): boolean {
+  if (state.finished) {
+    return true;
+  }
+  const progress = state.progress;
+  return progress !== null && progress.bytes_total > 0 && progress.bytes_done >= progress.bytes_total;
+}
+
 /** 队列里每一行此刻的状态 */
 export function rowState(state: AppState): 'waiting' | 'flowing' | 'done' {
-  if (state.finished) {
+  if (transferComplete(state)) {
     return 'done';
   }
   return state.running ? 'flowing' : 'waiting';

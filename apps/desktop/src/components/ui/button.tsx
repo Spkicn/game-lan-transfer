@@ -12,7 +12,7 @@ const buttonVariants = cva(
       variant: {
         primary:
           'bg-lamp-flow text-panel-hole hover:bg-[color-mix(in_oklab,var(--color-lamp-flow)_88%,white)]',
-        key: 'border border-panel-edge bg-panel-face text-ink hover:border-lamp-flow hover:text-lamp-flow',
+        key: 'border border-panel-rim bg-panel-face text-ink hover:border-lamp-flow hover:text-lamp-flow',
         quiet: 'text-ink-dim hover:text-ink',
       },
       size: {

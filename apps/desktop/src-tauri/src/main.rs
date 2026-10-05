@@ -17,7 +17,7 @@ use gamelift_core::net::client::{self, Layout, RecvOptions};
 use gamelift_core::net::discovery::{self, Peer};
 use gamelift_core::net::paths::{join_within, sanitize_relative};
 use gamelift_core::net::protocol::{ClaimFile, RequestItem};
-use gamelift_core::net::server::{self, ExtraRoot, HostOptions};
+use gamelift_core::net::server::{self, ExtraRoot, HostOptions, ServerCounters};
 use gamelift_core::net::session::{self, Decision, RequestListener, TransferRequest};
 use gamelift_core::net::{self, DEFAULT_STREAMS};
 use gamelift_core::{link, Error};
@@ -764,6 +764,7 @@ fn respond_request(
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 fn start_send(
+    app: AppHandle,
     state: State<'_, AppState>,
     peer: String,
     items: Vec<String>,
@@ -814,6 +815,7 @@ fn start_send(
     })
     .map_err(describe)?;
     let port = host.local_addr().port();
+    let counters = host.counters();
     let stop = Arc::new(AtomicBool::new(false));
     let announce = Peer {
         instance: discovery::new_instance(),
@@ -825,26 +827,14 @@ fn start_send(
         pairing_required: true,
     };
     spawn_announcer(ip, announce, Arc::clone(&stop))?;
+    let progress_stop = Arc::clone(&stop);
     *lock(&state.host) = Some(RunningHost {
         inner: Mutex::new(host),
         stop,
     });
 
     // 汇总待传条目并发出请求
-    let mut summaries = Vec::with_capacity(items.len());
-    let mut total = 0u64;
-    for item in &items {
-        let path = PathBuf::from(item);
-        let bytes = path_size(&path);
-        total = total.saturating_add(bytes);
-        summaries.push(RequestItem {
-            name: path
-                .file_name()
-                .map_or_else(|| item.clone(), |name| name.to_string_lossy().into_owned()),
-            is_dir: path.is_dir(),
-            bytes,
-        });
-    }
+    let (summaries, total) = summarize_items(&items);
     let request = TransferRequest {
         sender_name: discovery::local_name(),
         items: summaries,
@@ -856,6 +846,10 @@ fn start_send(
     let request_addr = parse_peer_with_default(&peer, session::REQUEST_PORT)?;
     let decision = session::request_transfer(request_addr, &request, session::ANSWER_TIMEOUT)
         .map_err(describe)?;
+    if matches!(decision, Decision::Approve { .. }) {
+        // 对端同意后由它来拉取，源端在这里把进度按事件推给界面
+        spawn_send_progress(app, counters, progress_stop);
+    }
     Ok(match decision {
         Decision::Approve { dest } => SendInfo {
             port,
@@ -872,14 +866,88 @@ fn start_send(
     })
 }
 
-/// 源端已下发的字节数，供界面显示发送进度
+/// 把选中的路径整理成请求里的条目与总量
+fn summarize_items(items: &[String]) -> (Vec<RequestItem>, u64) {
+    let mut summaries = Vec::with_capacity(items.len());
+    let mut total = 0u64;
+    for item in items {
+        let path = PathBuf::from(item);
+        let bytes = path_size(&path);
+        total = total.saturating_add(bytes);
+        summaries.push(RequestItem {
+            name: path
+                .file_name()
+                .map_or_else(|| item.clone(), |name| name.to_string_lossy().into_owned()),
+            is_dir: path.is_dir(),
+            bytes,
+        });
+    }
+    (summaries, total)
+}
+
+/// 源端进度线程：对端开始拉取之后把已下发字节推给界面
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
+fn spawn_send_progress(app: AppHandle, counters: ServerCounters, stop: Arc<AtomicBool>) {
+    let spawned = thread::Builder::new()
+        .name("gamelift-send-progress".to_owned())
+        .spawn(move || {
+            let mut last_bytes = counters.bytes_sent();
+            let mut last_at = Instant::now();
+            let mut ema = 0.0_f64;
+            loop {
+                thread::sleep(Duration::from_millis(500));
+                if stop.load(Ordering::Relaxed) {
+                    return;
+                }
+                let done = counters.bytes_sent();
+                let total = counters.bytes_total();
+                let elapsed = last_at.elapsed().as_secs_f64();
+                if elapsed > 0.0 {
+                    let sample = done.saturating_sub(last_bytes) as f64 / elapsed;
+                    ema = if ema <= 0.0 {
+                        sample
+                    } else {
+                        ema * 0.6 + sample * 0.4
+                    };
+                }
+                last_bytes = done;
+                last_at = Instant::now();
+                let fraction = if total == 0 {
+                    0.0
+                } else {
+                    (done as f64 / total as f64).min(1.0)
+                };
+                let _ = app.emit(
+                    EVENT_PROGRESS,
+                    ProgressEvent {
+                        bytes_done: done,
+                        bytes_total: total,
+                        bytes_per_sec: ema.max(0.0) as u64,
+                        fraction,
+                    },
+                );
+                if total > 0 && done >= total {
+                    return;
+                }
+            }
+        });
+    if let Err(err) = spawned {
+        eprintln!("发送进度线程启动失败: {err}");
+    }
+}
+
+/// 目标路径所在盘的可用空间
+///
+/// # Errors
+///
+/// 路径无法访问时返回说明
 #[tauri::command]
-fn send_progress(state: State<'_, AppState>) -> u64 {
-    let guard = lock(&state.host);
-    guard
-        .as_ref()
-        .and_then(|running| running.inner.lock().ok().map(|host| host.bytes_sent()))
-        .unwrap_or(0)
+fn free_space(path: String) -> Result<u64, String> {
+    link::free_bytes_at(&PathBuf::from(path)).map_err(describe)
 }
 
 /// 目录或文件的字节数，目录递归求和
@@ -930,7 +998,7 @@ fn main() {
             stop_listen,
             respond_request,
             start_send,
-            send_progress
+            free_space
         ])
         .run(tauri::generate_context!());
     if let Err(err) = result {

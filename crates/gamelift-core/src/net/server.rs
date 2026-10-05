@@ -84,10 +84,41 @@ pub struct Host {
     local_addr: SocketAddr,
     shutdown: Arc<AtomicBool>,
     counters: Arc<Counters>,
+    total_bytes: u64,
     handle: Option<JoinHandle<()>>,
 }
 
+/// 源端计数的只读句柄，供调用方在别的线程里读进度
+#[derive(Debug, Clone)]
+pub struct ServerCounters {
+    counters: Arc<Counters>,
+    total_bytes: u64,
+}
+
+impl ServerCounters {
+    /// 已下发的分块负载字节数
+    #[must_use]
+    pub fn bytes_sent(&self) -> u64 {
+        self.counters.bytes_sent.load(Ordering::Relaxed)
+    }
+
+    /// 本次对外暴露的内容总字节数
+    #[must_use]
+    pub fn bytes_total(&self) -> u64 {
+        self.total_bytes
+    }
+}
+
 impl Host {
+    /// 取一份计数句柄，可在其他线程里读进度
+    #[must_use]
+    pub fn counters(&self) -> ServerCounters {
+        ServerCounters {
+            counters: Arc::clone(&self.counters),
+            total_bytes: self.total_bytes,
+        }
+    }
+
     /// 启动源端服务
     ///
     /// # Errors
@@ -125,6 +156,7 @@ impl Host {
         }
         let options = Arc::new(options);
         let counters = Arc::new(Counters::default());
+        let total_bytes = files.iter().map(|file| file.size).sum::<u64>();
         let session = Arc::new(Session {
             options: Arc::clone(&options),
             files,
@@ -148,6 +180,7 @@ impl Host {
             local_addr,
             shutdown,
             counters,
+            total_bytes,
             handle: Some(handle),
         })
     }
@@ -162,6 +195,12 @@ impl Host {
     #[must_use]
     pub fn bytes_sent(&self) -> u64 {
         self.counters.bytes_sent.load(Ordering::Relaxed)
+    }
+
+    /// 本次对外暴露的内容总字节数
+    #[must_use]
+    pub fn bytes_total(&self) -> u64 {
+        self.total_bytes
     }
 
     /// 已接受的会话数
@@ -602,6 +641,20 @@ mod tests {
         assert_eq!(primary, root.join("a.bin"));
         std::fs::remove_dir_all(&root).expect("cleanup");
         std::fs::remove_dir_all(&extra_dir).expect("cleanup");
+    }
+
+    #[test]
+    fn host_reports_total_bytes_before_any_session() {
+        let root = temp_dir("total-bytes");
+        std::fs::write(root.join("a.bin"), vec![0_u8; 100]).expect("write");
+        std::fs::write(root.join("b.bin"), vec![0_u8; 24]).expect("write");
+        let mut host = Host::start(options(root.clone(), SocketAddr::from(([127, 0, 0, 1], 0))))
+            .expect("host");
+        assert_eq!(host.bytes_total(), 124);
+        assert_eq!(host.counters().bytes_total(), 124);
+        assert_eq!(host.counters().bytes_sent(), 0);
+        host.shutdown();
+        std::fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[test]

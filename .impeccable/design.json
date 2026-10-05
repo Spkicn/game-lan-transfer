@@ -73,8 +73,14 @@
       "ink-faint": {
         "role": "neutral",
         "displayName": "淡字",
-        "canonical": "#6b7788",
-        "tonalRamp": ["#0c1015", "#161b22", "#252d38", "#3d4653", "#57616f", "#6b7788", "#a7b0bd", "#dde3eb"]
+        "canonical": "#7a8594",
+        "tonalRamp": ["#0f141a", "#1a2029", "#2b333f", "#45505e", "#6b7788", "#7a8594", "#b6bec9", "#e2e7ee"]
+      },
+      "panel-rim": {
+        "role": "neutral",
+        "displayName": "孔位边",
+        "canonical": "#7a8594",
+        "tonalRamp": ["#0f141a", "#1a2029", "#2b333f", "#45505e", "#6b7788", "#7a8594", "#b6bec9", "#e2e7ee"]
       }
     },
     "typographyMeta": {
@@ -112,7 +118,7 @@
       "refersTo": "button-key",
       "description": "面板上的次级按键，1px 缝线边界",
       "html": "<button class=\"ds-btn-key\">找对端</button>",
-      "css": ".ds-btn-key { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 32px; padding: 0 12px; background: var(--color-panel-face, #171d25); color: var(--color-ink, #e8edf5); border: 1px solid var(--color-panel-edge, #232b36); border-radius: 0; font-family: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif; font-size: 13px; font-weight: 500; cursor: pointer; transition: color 100ms linear, border-color 100ms linear; } .ds-btn-key:hover { color: var(--color-lamp-flow, #4c9dff); border-color: var(--color-lamp-flow, #4c9dff); } .ds-btn-key:focus-visible { outline: 2px solid var(--color-lamp-flow, #4c9dff); outline-offset: 2px; } .ds-btn-key:disabled { opacity: 0.4; cursor: default; }"
+      "css": ".ds-btn-key { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 32px; padding: 0 12px; background: var(--color-panel-face, #171d25); color: var(--color-ink, #e8edf5); border: 1px solid var(--color-panel-rim, #7a8594); border-radius: 0; font-family: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif; font-size: 13px; font-weight: 500; cursor: pointer; transition: color 100ms linear, border-color 100ms linear; } .ds-btn-key:hover { color: var(--color-lamp-flow, #4c9dff); border-color: var(--color-lamp-flow, #4c9dff); } .ds-btn-key:focus-visible { outline: 2px solid var(--color-lamp-flow, #4c9dff); outline-offset: 2px; } .ds-btn-key:disabled { opacity: 0.4; cursor: default; }"
     },
     {
       "name": "Quiet Button",
@@ -144,7 +150,7 @@
       "refersTo": "rail-row",
       "description": "面板行：选择孔、名字、路径、读数与状态字",
       "html": "<div class=\"ds-row\"><span class=\"ds-check ds-check-on\"></span><span class=\"ds-row-body\"><span class=\"ds-row-title\">示例游戏 A</span><span class=\"ds-row-meta\">steam · D:/SteamLibrary/example_a</span></span><span class=\"ds-row-reading\">64.0 GiB</span><span class=\"ds-row-state\">等待</span></div>",
-      "css": ".ds-row { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 10px 12px; background: color-mix(in oklab, var(--color-lamp-flow, #4c9dff) 10%, transparent); border-bottom: 1px solid color-mix(in oklab, var(--color-panel-edge, #232b36) 70%, transparent); border-radius: 0; font-family: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif; } .ds-check { width: 16px; height: 16px; flex-shrink: 0; background: var(--color-panel-hole, #0a0d11); border: 1px solid var(--color-panel-edge, #232b36); } .ds-check-on { background: var(--color-lamp-ready, #35d39a); border-color: var(--color-lamp-ready, #35d39a); } .ds-row-body { display: flex; flex-direction: column; min-width: 0; flex: 1; } .ds-row-title { font-size: 14px; color: var(--color-ink, #e8edf5); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .ds-row-meta { font-family: 'Cascadia Mono', Consolas, ui-monospace, monospace; font-size: 12px; color: var(--color-ink-faint, #6b7788); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .ds-row-reading { font-family: 'Cascadia Mono', Consolas, ui-monospace, monospace; font-size: 13px; font-variant-numeric: tabular-nums; color: var(--color-ink-dim, #93a1b4); } .ds-row-state { font-family: 'Cascadia Mono', Consolas, ui-monospace, monospace; font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--color-lamp-flow, #4c9dff); }"
+      "css": ".ds-row { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 10px 12px; background: color-mix(in oklab, var(--color-lamp-flow, #4c9dff) 10%, transparent); border-bottom: 1px solid color-mix(in oklab, var(--color-panel-edge, #232b36) 70%, transparent); border-radius: 0; font-family: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif; } .ds-check { width: 16px; height: 16px; flex-shrink: 0; background: var(--color-panel-hole, #0a0d11); border: 1px solid var(--color-panel-rim, #7a8594); } .ds-check-on { background: var(--color-lamp-ready, #35d39a); border-color: var(--color-lamp-ready, #35d39a); } .ds-row-body { display: flex; flex-direction: column; min-width: 0; flex: 1; } .ds-row-title { font-size: 14px; color: var(--color-ink, #e8edf5); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .ds-row-meta { font-family: 'Cascadia Mono', Consolas, ui-monospace, monospace; font-size: 12px; color: var(--color-ink-faint, #6b7788); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .ds-row-reading { font-family: 'Cascadia Mono', Consolas, ui-monospace, monospace; font-size: 13px; font-variant-numeric: tabular-nums; color: var(--color-ink-dim, #93a1b4); } .ds-row-state { font-family: 'Cascadia Mono', Consolas, ui-monospace, monospace; font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--color-lamp-flow, #4c9dff); }"
     },
     {
       "name": "Text Field",
@@ -152,7 +158,7 @@
       "refersTo": "input-field",
       "description": "孔位黑底的输入孔，聚焦时边框转流量蓝",
       "html": "<input class=\"ds-input\" placeholder=\"目标文件夹，例如 D:\\\\Games\" />",
-      "css": ".ds-input { height: 36px; width: 100%; padding: 0 12px; background: var(--color-panel-hole, #0a0d11); color: var(--color-ink, #e8edf5); border: 1px solid var(--color-panel-edge, #232b36); border-radius: 0; font-family: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif; font-size: 14px; } .ds-input::placeholder { color: var(--color-ink-faint, #6b7788); } .ds-input:focus { outline: none; border-color: var(--color-lamp-flow, #4c9dff); }"
+      "css": ".ds-input { height: 36px; width: 100%; padding: 0 12px; background: var(--color-panel-hole, #0a0d11); color: var(--color-ink, #e8edf5); border: 1px solid var(--color-panel-rim, #7a8594); border-radius: 0; font-family: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif; font-size: 14px; } .ds-input::placeholder { color: var(--color-ink-faint, #6b7788); } .ds-input:focus { outline: none; border-color: var(--color-lamp-flow, #4c9dff); }"
     },
     {
       "name": "Patch Cord",

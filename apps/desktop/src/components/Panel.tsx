@@ -54,13 +54,18 @@ export function Port({
       <div
         className={cn(
           'flex flex-1 flex-col justify-start gap-2 border px-4 py-4',
-          slot ? 'border-dashed border-panel-edge bg-transparent' : 'border-panel-edge bg-panel-face',
+          slot ? 'border-dashed border-panel-rim/60 bg-transparent' : 'border-panel-edge bg-panel-face',
         )}
       >
-        <p className="truncate text-[19px] font-semibold tracking-tight">{name}</p>
-        <p className="reading truncate text-[13px] text-ink-dim">{endpoint}</p>
+        <p className="truncate text-[19px] font-semibold tracking-tight" title={name}>
+          {name}
+        </p>
+        <p className="reading truncate text-[13px] text-ink-dim" title={endpoint}>
+          {endpoint}
+        </p>
       </div>
-      <div className="flex flex-col gap-3">{children}</div>
+      {/* 两边控制件高度对齐，机位底边才会齐 */}
+      <div className="flex min-h-[104px] flex-col gap-3">{children}</div>
     </section>
   );
 }
@@ -105,7 +110,9 @@ export function LinkRail({
 /** 面板上的行：选择孔、名字、读数、状态 */
 export function RailRow({
   selected,
-  onToggle,
+  onSelect,
+  onActivate,
+  selectLabel,
   title,
   meta,
   reading,
@@ -113,7 +120,9 @@ export function RailRow({
   disabled = false,
 }: {
   selected: boolean;
-  onToggle?: () => void;
+  onSelect?: () => void;
+  onActivate?: () => void;
+  selectLabel?: string;
   title: string;
   meta?: string;
   reading?: string;
@@ -123,35 +132,52 @@ export function RailRow({
   return (
     <li
       className={cn(
-        'flex items-center gap-3 border-b border-panel-edge/70 px-3 py-2.5 last:border-b-0',
+        'flex min-w-0 items-center gap-3 border-b border-panel-edge/70 px-3 py-2.5 last:border-b-0',
         selected && 'bg-[color-mix(in_oklab,var(--color-lamp-flow)_10%,transparent)]',
         disabled && 'opacity-50',
       )}
     >
-      {onToggle ? (
-        <Checkbox checked={selected} disabled={disabled} onCheckedChange={() => onToggle()} />
+      {onSelect ? (
+        <Checkbox
+          checked={selected}
+          label={selectLabel ?? title}
+          disabled={disabled}
+          onCheckedChange={() => onSelect()}
+        />
       ) : (
-        <span className="size-4" aria-hidden />
+        <span className="size-4 shrink-0" aria-hidden />
       )}
       <button
         type="button"
         className="min-w-0 flex-1 text-left disabled:cursor-default"
-        onClick={onToggle}
-        disabled={!onToggle || disabled}
+        onClick={onActivate ?? onSelect}
+        disabled={(!onActivate && !onSelect) || disabled}
       >
-        <span className="block truncate text-[14px]">{title}</span>
-        {meta ? <span className="reading block truncate text-[12px] text-ink-faint">{meta}</span> : null}
+        <span className="block truncate text-[14px]" title={title}>
+          {title}
+        </span>
+        {meta ? (
+          <span className="reading block truncate text-[12px] text-ink-faint" title={meta}>
+            {meta}
+          </span>
+        ) : null}
       </button>
-      {reading ? <span className="reading shrink-0 text-[13px] text-ink-dim">{reading}</span> : null}
+      {reading ? (
+        <span className="reading shrink-0 text-[13px] text-ink-dim">{reading}</span>
+      ) : null}
       {state}
     </li>
   );
 }
 
-/** 底部状态条：只写此刻该做的一件事 */
-export function StatusStrip({ children }: { children: ReactNode }) {
+/** 底部状态条：只写此刻该做的一件事，出现变化时也让读屏知道 */
+export function StatusStrip({ children, alert = false }: { children: ReactNode; alert?: boolean }) {
   return (
-    <footer className="flex min-h-11 flex-wrap items-center gap-x-4 gap-y-1 border-t border-panel-edge bg-panel-rail px-5 py-2 text-[13px] text-ink-dim">
+    <footer
+      role={alert ? 'alert' : 'status'}
+      aria-live={alert ? 'assertive' : 'polite'}
+      className="flex min-h-11 min-w-0 flex-wrap items-center gap-x-4 gap-y-1 border-t border-panel-edge bg-panel-rail px-5 py-2 text-[13px] text-ink-dim"
+    >
       {children}
     </footer>
   );

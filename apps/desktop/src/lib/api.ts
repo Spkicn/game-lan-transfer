@@ -121,16 +121,6 @@ export function startSend(
   return invoke<SendInfo>('start_send', { peer, items, pairing, iface });
 }
 
-/** 源端已下发字节数 */
-let mockSent = 0;
-export function sendProgress(): Promise<number> {
-  if (MOCK) {
-    mockSent += 1;
-    return mock(mockSent, 10);
-  }
-  return invoke<number>('send_progress');
-}
-
 /** 接收内容 */
 export function startRecv(
   peer: string,
@@ -167,6 +157,14 @@ export function cancelRecv(): Promise<void> {
     return mock(undefined);
   }
   return invoke<void>('cancel_recv');
+}
+
+/** 目标路径所在盘的可用空间 */
+export function freeSpace(path: string): Promise<number> {
+  if (MOCK) {
+    return mock(240 * 1024 ** 3, 120);
+  }
+  return invoke<number>('free_space', { path });
 }
 
 /** 本机默认目标目录 */

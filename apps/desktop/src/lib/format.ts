@@ -51,10 +51,10 @@ export function formatEta(done: number, total: number, rate: number): string {
   return formatDuration(Math.max(0, total - done) / rate);
 }
 
-/** 完成比例，取值 0–100 */
+/** 完成比例，取值 0–100；总量未知时视为还没开始 */
 export function percent(done: number, total: number): number {
   if (!Number.isFinite(total) || total <= 0) {
-    return 100;
+    return 0;
   }
   const value = (done / total) * 100;
   return Math.min(100, Math.max(0, value));

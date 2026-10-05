@@ -7,7 +7,7 @@ export function Input({ className, ...props }: ComponentProps<'input'>) {
   return (
     <input
       className={cn(
-        'h-9 w-full min-w-0 border border-panel-edge bg-panel-hole px-3 text-[14px] text-ink',
+        'h-9 w-full min-w-0 border border-panel-rim bg-panel-hole px-3 text-[14px] text-ink',
         'placeholder:text-ink-faint focus-visible:border-lamp-flow',
         'disabled:cursor-not-allowed disabled:opacity-40',
         className,

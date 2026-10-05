@@ -119,7 +119,7 @@ mod tests {
         let message = Message::Hello {
             version: PROTOCOL_VERSION,
             pairing: Some("123456".to_owned()),
-            want: "431960".to_owned(),
+            want: "example_game".to_owned(),
             need_manifest: true,
         };
         let decoded = decode(&encode(&message).expect("encode")).expect("decode");

@@ -186,6 +186,49 @@ pub fn peer_ip(host_octet: u8) -> String {
     format!("{LINK_SUBNET_PREFIX}.{host_octet}")
 }
 
+/// 可用于局域网传输的本机地址
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalAddress {
+    /// 网卡名称
+    pub nic_name: String,
+    /// IPv4 地址
+    pub ip: String,
+    /// 是否为物理以太网口
+    pub is_physical: bool,
+}
+
+/// 选一个可用于局域网传输的本机地址
+///
+/// 优先物理以太网口上已配置的地址，其次是任意网卡上已配置的地址，
+/// 这样只连 Wi-Fi 的机器也能直接使用，不必先插网线配静态地址
+#[must_use]
+pub fn preferred_ipv4(nics: &[Nic]) -> Option<LocalAddress> {
+    let mut fallback: Option<LocalAddress> = None;
+    for nic in nics {
+        let Some(ip) = nic.current_ipv4.as_deref().filter(|ip| !ip.is_empty()) else {
+            continue;
+        };
+        let candidate = LocalAddress {
+            nic_name: nic.name.clone(),
+            ip: ip.to_owned(),
+            is_physical: nic.is_physical,
+        };
+        if nic.is_physical {
+            return Some(candidate);
+        }
+        if fallback.is_none() {
+            fallback = Some(candidate);
+        }
+    }
+    fallback
+}
+
+/// 地址是否落在本工具配置的直连网段里
+#[must_use]
+pub fn is_direct_link_ip(ip: &str) -> bool {
+    ip.starts_with(&format!("{LINK_SUBNET_PREFIX}."))
+}
+
 /// 目标盘剩余空间，单位字节；`drive` 接受 "C" 或 "C:\" 形式
 ///
 /// # Errors
@@ -215,6 +258,45 @@ pub fn free_bytes_at(path: &std::path::Path) -> Result<u64> {
 #[allow(clippy::expect_used)]
 mod tests {
     use super::*;
+
+    fn nic(name: &str, is_physical: bool, ip: Option<&str>) -> Nic {
+        Nic {
+            name: name.to_owned(),
+            description: format!("{name} 描述"),
+            is_physical,
+            current_ipv4: ip.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn preferred_ipv4_takes_physical_first() {
+        let nics = vec![
+            nic("WLAN", false, Some("10.0.0.5")),
+            nic("以太网", true, Some("192.168.88.1")),
+        ];
+        let picked = preferred_ipv4(&nics).expect("应选中物理口");
+        assert_eq!(picked.ip, "192.168.88.1");
+        assert!(picked.is_physical);
+        assert!(is_direct_link_ip(&picked.ip));
+    }
+
+    #[test]
+    fn preferred_ipv4_falls_back_to_other_nic() {
+        let nics = vec![
+            nic("以太网", true, None),
+            nic("WLAN", false, Some("172.20.16.119")),
+        ];
+        let picked = preferred_ipv4(&nics).expect("应回退到无线网卡");
+        assert_eq!(picked.ip, "172.20.16.119");
+        assert!(!picked.is_physical);
+        assert!(!is_direct_link_ip(&picked.ip));
+    }
+
+    #[test]
+    fn preferred_ipv4_none_without_address() {
+        let nics = vec![nic("以太网", true, None), nic("WLAN", false, Some(""))];
+        assert!(preferred_ipv4(&nics).is_none());
+    }
 
     #[test]
     fn physical_ethernet_detection() {

@@ -9,9 +9,12 @@ import {
   defaultDest,
   describeError,
   discoverPeers,
+  networkStatus,
   onProgress,
   previewTarget,
+  revertLink,
   scanGames,
+  setupLink,
   startHost,
   startRecv,
   stopHost,
@@ -66,6 +69,48 @@ function banners(): string {
   return error + notice;
 }
 
+/** 网络卡片：展示可用地址，并提供直连配置入口 */
+function networkView(): string {
+  const network = state.network;
+  if (!network) {
+    return `<section class="card">
+      <header>
+        <h2>网络</h2>
+        <button data-action="refresh-network" ${state.busy ? 'disabled' : ''}>检测网络</button>
+      </header>
+      <p class="hint">还没有检测网络</p>
+    </section>`;
+  }
+  const current = network.address
+    ? `<strong>${text(network.address)}</strong>（${text(network.nic_name ?? '未知网卡')}${
+        network.is_physical ? '，以太网口' : '，无线或其它'
+      }）`
+    : '未找到可用地址';
+  const rows = network.nics
+    .map(
+      (nic) => `<li class="row static">
+        <span class="name">${text(nic.name)}</span>
+        <span class="meta">${nic.is_physical ? '物理口' : '虚拟或无线'} · ${text(nic.ip ?? '未配置')} · ${text(nic.description)}</span>
+      </li>`,
+    )
+    .join('');
+  const nicList = network.nics.length === 0 ? '' : `<ul class="list">${rows}</ul>`;
+  return `<section class="card">
+    <header>
+      <h2>网络</h2>
+      <button data-action="refresh-network" ${state.busy ? 'disabled' : ''}>重新检测</button>
+    </header>
+    <p class="hint">将使用：${current}</p>
+    <p class="hint">${text(network.hint)}</p>
+    <div class="choices">
+      <button data-action="setup-link-1" ${state.busy ? 'disabled' : ''}>配置直连（本机 192.168.88.1）</button>
+      <button data-action="setup-link-2" ${state.busy ? 'disabled' : ''}>配置直连（本机 192.168.88.2）</button>
+      <button data-action="revert-link" ${state.busy ? 'disabled' : ''}>还原直连</button>
+    </div>
+    ${nicList}
+  </section>`;
+}
+
 function scanView(): string {
   const games =
     state.games.length === 0
@@ -98,6 +143,7 @@ function scanView(): string {
 
   return `${steps(0)}
     ${banners()}
+    ${networkView()}
     <section class="card">
       <header>
         <h2>本机游戏</h2>
@@ -288,7 +334,13 @@ async function runSend(): Promise<void> {
   }
   state = reduce(state, { type: 'busy', busy: true });
   render();
-  const info = await startHost(game.install_dir, game.name, game.platform, null);
+  const info = await startHost(
+    game.install_dir,
+    game.name,
+    game.platform,
+    null,
+    state.network?.address ?? null,
+  );
   state = reduce(state, { type: 'host', host: info });
   state = reduce(state, { type: 'busy', busy: false });
   state = reduce(state, { type: 'screen', screen: 'transfer' });
@@ -339,9 +391,34 @@ async function handle(action: string, id: string | null): Promise<void> {
         break;
       }
       case 'discover': {
+        const iface = state.network?.address ?? null;
         state = reduce(state, { type: 'busy', busy: true });
         render();
-        state = reduce(state, { type: 'peers', peers: await discoverPeers(3) });
+        state = reduce(state, { type: 'peers', peers: await discoverPeers(iface, 3) });
+        break;
+      }
+      case 'refresh-network': {
+        state = reduce(state, { type: 'busy', busy: true });
+        render();
+        state = reduce(state, { type: 'network', network: await networkStatus() });
+        break;
+      }
+      case 'setup-link-1':
+      case 'setup-link-2': {
+        const host = action === 'setup-link-1' ? 1 : 2;
+        state = reduce(state, { type: 'busy', busy: true });
+        render();
+        const ip = await setupLink(host);
+        state = reduce(state, { type: 'notice', message: `已配置直连地址 ${ip}` });
+        state = reduce(state, { type: 'network', network: await networkStatus() });
+        break;
+      }
+      case 'revert-link': {
+        state = reduce(state, { type: 'busy', busy: true });
+        render();
+        await revertLink();
+        state = reduce(state, { type: 'notice', message: '直连配置已还原' });
+        state = reduce(state, { type: 'network', network: await networkStatus() });
         break;
       }
       case 'pick-game':
@@ -425,8 +502,13 @@ mount.addEventListener('input', (event) => {
   }
 });
 
-/** 启动：取一次默认目标目录 */
+/** 启动：先读网络状态，再取一次默认目标目录 */
 async function boot(): Promise<void> {
+  try {
+    state = reduce(state, { type: 'network', network: await networkStatus() });
+  } catch (error) {
+    state = reduce(state, { type: 'error', message: describeError(error) });
+  }
   try {
     const dest = await defaultDest();
     if (dest) {

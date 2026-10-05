@@ -86,4 +86,23 @@ describe('三屏状态机', () => {
     expect(state.screen).toBe('scan');
     expect(state.dest).toBe('E:/games');
   });
+
+  it('网络状态决定后续用哪个地址', () => {
+    const state = reduce(initialState, {
+      type: 'network',
+      network: {
+        nics: [
+          { name: '以太网', description: 'Gigabit Ethernet', is_physical: true, ip: '192.168.88.1' },
+        ],
+        address: '192.168.88.1',
+        nic_name: '以太网',
+        is_physical: true,
+        direct_link: true,
+        hint: '已配好直连地址',
+      },
+    });
+    expect(state.network?.address).toBe('192.168.88.1');
+    expect(state.network?.direct_link).toBe(true);
+    expect(state.busy).toBe(false);
+  });
 });

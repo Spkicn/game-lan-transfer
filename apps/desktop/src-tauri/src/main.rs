@@ -395,6 +395,99 @@ fn default_dest() -> Option<String> {
     )
 }
 
+/// 网卡条目
+#[derive(Debug, Clone, Serialize)]
+struct NicEntry {
+    /// 连接名
+    name: String,
+    /// 硬件描述
+    description: String,
+    /// 是否为物理以太网口
+    is_physical: bool,
+    /// 当前 IPv4
+    ip: Option<String>,
+}
+
+/// 网络现状，供界面展示与选地址
+#[derive(Debug, Clone, Serialize)]
+struct NetworkStatus {
+    /// 全部网卡
+    nics: Vec<NicEntry>,
+    /// 将要使用的本机地址
+    address: Option<String>,
+    /// 该地址所在网卡名
+    nic_name: Option<String>,
+    /// 该网卡是否为物理以太网口
+    is_physical: bool,
+    /// 是否已落在直连网段
+    direct_link: bool,
+    /// 下一步提示
+    hint: String,
+}
+
+/// 读取网卡与可用地址
+#[tauri::command]
+fn network_status() -> NetworkStatus {
+    let nics = link::list_nics();
+    let picked = link::preferred_ipv4(&nics);
+    let (address, nic_name, is_physical, direct_link) = match &picked {
+        Some(found) => (
+            Some(found.ip.clone()),
+            Some(found.nic_name.clone()),
+            found.is_physical,
+            link::is_direct_link_ip(&found.ip),
+        ),
+        None => (None, None, false, false),
+    };
+    let hint = if address.is_none() {
+        "没有可用的本机地址：先连上网络，或点「配置直连」自动配一个".to_owned()
+    } else if direct_link {
+        "已配好直连地址，插上网线就能与对端互通".to_owned()
+    } else if is_physical {
+        "用的是以太网口，建议点「配置直连」把两台机器放进同一网段".to_owned()
+    } else {
+        "当前走无线网卡，同一局域网内也能传；插网线会快很多".to_owned()
+    };
+    NetworkStatus {
+        nics: nics
+            .into_iter()
+            .map(|nic| NicEntry {
+                name: nic.name,
+                description: nic.description,
+                is_physical: nic.is_physical,
+                ip: nic.current_ipv4,
+            })
+            .collect(),
+        address,
+        nic_name,
+        is_physical,
+        direct_link,
+        hint,
+    }
+}
+
+/// 给物理以太网口配置直连地址，需要管理员权限
+///
+/// # Errors
+///
+/// 找不到物理网口或提权失败时返回说明
+#[tauri::command]
+fn setup_link(host: u8) -> Result<String, String> {
+    link::setup_direct_link(host).map_err(describe)
+}
+
+/// 还原直连配置，两端都清理一遍
+///
+/// # Errors
+///
+/// 还原失败时返回说明
+#[tauri::command]
+fn revert_link() -> Result<(), String> {
+    link::revert_direct_link(1).map_err(describe)?;
+    let _ = link::revert_direct_link(2);
+    Ok(())
+}
+
 fn main() {
     let result = tauri::Builder::default()
         .manage(AppState::default())
@@ -406,7 +499,10 @@ fn main() {
             stop_host,
             start_recv,
             cancel_recv,
-            default_dest
+            default_dest,
+            network_status,
+            setup_link,
+            revert_link
         ])
         .run(tauri::generate_context!());
     if let Err(err) = result {
@@ -415,25 +511,23 @@ fn main() {
     }
 }
 
-/// 解析本机直连地址，未给定时取第一个物理网口的地址
+/// 解析本机地址，未给定时优先物理以太网口，其次任意有地址的网卡
 ///
 /// # Errors
 ///
-/// 找不到物理网口或地址不可解析时返回说明
+/// 本机没有可用地址或地址不可解析时返回说明
 fn local_ip(explicit: Option<&str>) -> Result<IpAddr, String> {
     if let Some(text) = explicit.filter(|value| !value.is_empty()) {
         return text
             .parse()
             .map_err(|_| format!("地址不合法: {text}，示例 192.168.88.1"));
     }
-    let nic = link::list_nics()
-        .into_iter()
-        .find(|nic| nic.is_physical)
-        .ok_or_else(|| "找不到物理以太网口，请先运行 gamelift link 配置直连地址".to_owned())?;
-    let text = nic
-        .current_ipv4
-        .ok_or_else(|| format!("{} 尚未配置地址，请先配置直连网段", nic.name))?;
-    text.parse().map_err(|_| format!("网口地址不合法: {text}"))
+    let picked = link::preferred_ipv4(&link::list_nics())
+        .ok_or_else(|| "没有可用的本机地址，请先连上网络，或在界面里点「配置直连」".to_owned())?;
+    picked
+        .ip
+        .parse()
+        .map_err(|_| format!("网口地址不合法: {}", picked.ip))
 }
 
 /// 解析对端地址，接受 `IP` 或 `IP:端口`

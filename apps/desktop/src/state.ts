@@ -65,12 +65,31 @@ export interface HostInfo {
   title: string;
 }
 
+/** 网卡条目 */
+export interface NicEntry {
+  name: string;
+  description: string;
+  is_physical: boolean;
+  ip: string | null;
+}
+
+/** 网络现状 */
+export interface NetworkStatus {
+  nics: NicEntry[];
+  address: string | null;
+  nic_name: string | null;
+  is_physical: boolean;
+  direct_link: boolean;
+  hint: string;
+}
+
 /** 界面状态 */
 export interface AppState {
   screen: Screen;
   busy: boolean;
   games: GameEntry[];
   peers: PeerEntry[];
+  network: NetworkStatus | null;
   selectedGameId: string | null;
   selectedPeer: string | null;
   role: Role;
@@ -90,6 +109,7 @@ export const initialState: AppState = {
   busy: false,
   games: [],
   peers: [],
+  network: null,
   selectedGameId: null,
   selectedPeer: null,
   role: 'send',
@@ -107,6 +127,7 @@ export const initialState: AppState = {
 export type Action =
   | { type: 'games'; games: GameEntry[] }
   | { type: 'peers'; peers: PeerEntry[] }
+  | { type: 'network'; network: NetworkStatus | null }
   | { type: 'select-game'; id: string }
   | { type: 'select-peer'; addr: string }
   | { type: 'role'; role: Role }
@@ -129,6 +150,8 @@ export function reduce(state: AppState, action: Action): AppState {
       return { ...state, games: action.games, busy: false, error: null };
     case 'peers':
       return { ...state, peers: action.peers, busy: false, error: null };
+    case 'network':
+      return { ...state, network: action.network, busy: false, error: null };
     case 'select-game':
       return { ...state, selectedGameId: action.id, preview: null };
     case 'select-peer':

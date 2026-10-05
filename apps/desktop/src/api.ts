@@ -8,6 +8,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type {
   GameEntry,
   HostInfo,
+  NetworkStatus,
   PeerEntry,
   Preview,
   Progress,
@@ -20,8 +21,23 @@ export function scanGames(): Promise<GameEntry[]> {
 }
 
 /** 在直连网段里发现对端 */
-export function discoverPeers(seconds: number): Promise<PeerEntry[]> {
-  return invoke<PeerEntry[]>('discover_peers', { seconds });
+export function discoverPeers(iface: string | null, seconds: number): Promise<PeerEntry[]> {
+  return invoke<PeerEntry[]>('discover_peers', { iface, seconds });
+}
+
+/** 读取网卡与可用地址 */
+export function networkStatus(): Promise<NetworkStatus> {
+  return invoke<NetworkStatus>('network_status');
+}
+
+/** 给物理以太网口配置直连地址 */
+export function setupLink(host: number): Promise<string> {
+  return invoke<string>('setup_link', { host });
+}
+
+/** 还原直连配置 */
+export function revertLink(): Promise<void> {
+  return invoke<void>('revert_link');
 }
 
 /** 传输前预检 */
@@ -40,8 +56,9 @@ export function startHost(
   title: string,
   platform: string,
   code: string | null,
+  iface: string | null,
 ): Promise<HostInfo> {
-  return invoke<HostInfo>('start_host', { installDir, title, platform, code });
+  return invoke<HostInfo>('start_host', { installDir, title, platform, code, iface });
 }
 
 /** 停止源端服务 */

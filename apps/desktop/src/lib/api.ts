@@ -7,12 +7,14 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 
 import type {
   GameEntry,
-  HostInfo,
+  IncomingEvent,
+  ListenInfo,
+  LocalEntry,
   NetworkStatus,
   PeerEntry,
-  Preview,
   Progress,
   RecvSummary,
+  SendInfo,
 } from './state';
 
 /** 扫描本机游戏库 */
@@ -30,7 +32,7 @@ export function networkStatus(): Promise<NetworkStatus> {
   return invoke<NetworkStatus>('network_status');
 }
 
-/** 给物理以太网口配置直连地址 */
+/** 配置直连地址 */
 export function setupLink(host: number): Promise<string> {
   return invoke<string>('setup_link', { host });
 }
@@ -40,30 +42,39 @@ export function revertLink(): Promise<void> {
   return invoke<void>('revert_link');
 }
 
-/** 传输前预检 */
-export function previewTarget(
+/** 列出本机目录内容；不传路径时给出盘符 */
+export function listLocal(path: string | null): Promise<LocalEntry[]> {
+  return invoke<LocalEntry[]>('list_local', { path });
+}
+
+/** 开始等待接收传输请求 */
+export function startListen(iface: string | null, pairing: string | null): Promise<ListenInfo> {
+  return invoke<ListenInfo>('start_listen', { iface, pairing });
+}
+
+/** 停止等待接收 */
+export function stopListen(): Promise<void> {
+  return invoke<void>('stop_listen');
+}
+
+/** 回应一条传入请求 */
+export function respondRequest(id: number, accepted: boolean, dest: string | null): Promise<void> {
+  return invoke<void>('respond_request', { id, accepted, dest });
+}
+
+/** 托管选中的内容并向对端发起请求 */
+export function startSend(
   peer: string,
-  want: string,
-  dest: string,
+  items: string[],
   pairing: string | null,
-): Promise<Preview> {
-  return invoke<Preview>('preview_target', { peer, want, dest, pairing });
-}
-
-/** 启动源端服务 */
-export function startHost(
-  installDir: string,
-  title: string,
-  platform: string,
-  code: string | null,
   iface: string | null,
-): Promise<HostInfo> {
-  return invoke<HostInfo>('start_host', { installDir, title, platform, code, iface });
+): Promise<SendInfo> {
+  return invoke<SendInfo>('start_send', { peer, items, pairing, iface });
 }
 
-/** 停止源端服务 */
-export function stopHost(): Promise<void> {
-  return invoke<void>('stop_host');
+/** 源端已下发字节数 */
+export function sendProgress(): Promise<number> {
+  return invoke<number>('send_progress');
 }
 
 /** 接收内容 */
@@ -74,8 +85,17 @@ export function startRecv(
   platform: string | null,
   pairing: string | null,
   force: boolean,
+  intoDestination: boolean,
 ): Promise<RecvSummary> {
-  return invoke<RecvSummary>('start_recv', { peer, want, dest, platform, pairing, force });
+  return invoke<RecvSummary>('start_recv', {
+    peer,
+    want,
+    dest,
+    platform,
+    pairing,
+    force,
+    intoDestination,
+  });
 }
 
 /** 取消接收 */
@@ -88,9 +108,16 @@ export function defaultDest(): Promise<string | null> {
   return invoke<string | null>('default_dest');
 }
 
-/** 订阅传输进度事件 */
+/** 订阅传输进度 */
 export function onProgress(handler: (payload: Progress) => void): Promise<UnlistenFn> {
   return listen<Progress>('transfer://progress', (event) => {
+    handler(event.payload);
+  });
+}
+
+/** 订阅传入的传输请求 */
+export function onRequest(handler: (payload: IncomingEvent) => void): Promise<UnlistenFn> {
+  return listen<IncomingEvent>('transfer://request', (event) => {
     handler(event.payload);
   });
 }

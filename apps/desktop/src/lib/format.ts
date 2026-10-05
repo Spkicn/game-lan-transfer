@@ -20,7 +20,7 @@ export function formatBytes(bytes: number): string {
 /** 传输速率 */
 export function formatRate(bytesPerSec: number): string {
   if (!Number.isFinite(bytesPerSec) || bytesPerSec <= 0) {
-    return '计算中';
+    return '待测';
   }
   return `${formatBytes(bytesPerSec)}/s`;
 }
@@ -46,7 +46,7 @@ export function formatDuration(seconds: number): string {
 /** 剩余时间 */
 export function formatEta(done: number, total: number, rate: number): string {
   if (!Number.isFinite(rate) || rate <= 0) {
-    return '计算中';
+    return '待测';
   }
   return formatDuration(Math.max(0, total - done) / rate);
 }
@@ -66,7 +66,17 @@ export function spaceAdvice(free: number, need: number): string {
     return '';
   }
   if (free >= need) {
-    return `空间充足，传完后还剩 ${formatBytes(free - need)}`;
+    return `空间够用，传完后还剩 ${formatBytes(free - need)}`;
   }
-  return `空间不足，还差 ${formatBytes(need - free)}，先清理目标盘或换一个盘`;
+  return `还差 ${formatBytes(need - free)}，先清理目标盘或换一个盘`;
+}
+
+/** 链路速率档位，用于端口上的一行读数 */
+export function linkSpeedText(free: number): string {
+  return free > 0 ? `对端可用 ${formatBytes(free)}` : '对端空间未知';
+}
+
+/** 端口标签：把 IPv4 与端口拼成面板读数 */
+export function endpointText(addr: string, port: number): string {
+  return port > 0 ? `${addr}:${port}` : addr;
 }

@@ -1,21 +1,21 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  canContinue,
+  canAdvance,
+  connected,
   initialState,
+  pickedBytes,
   reduce,
-  selectedGame,
-  selectedPeer,
   type GameEntry,
   type PeerEntry,
-} from '../src/state';
+} from '../src/lib/state';
 
 const game: GameEntry = {
   id: 'steam:D:/games/demo',
   name: '示例游戏',
   platform: 'steam',
   install_dir: 'D:/games/demo',
-  size_bytes: 1024,
+  size_bytes: 4096,
   fingerprint: 'build-1',
 };
 
@@ -24,85 +24,76 @@ const peer: PeerEntry = {
   addr: '192.168.88.2',
   session_port: 27101,
   platform: 'windows',
-  free_bytes: 2048,
+  free_bytes: 8192,
 };
 
-describe('三屏状态机', () => {
-  it('初始停在扫描屏', () => {
-    expect(initialState.screen).toBe('scan');
-    expect(canContinue(initialState)).toBe(false);
+describe('三阶段状态机', () => {
+  it('从连接阶段开始，未接上对端不能往下走', () => {
+    expect(initialState.stage).toBe('connect');
+    expect(connected(initialState)).toBe(false);
+    expect(canAdvance(initialState)).toBe(false);
   });
 
-  it('选中游戏与对端后可以进入下一步', () => {
-    let state = reduce(initialState, { type: 'games', games: [game] });
-    state = reduce(state, { type: 'select-game', id: game.id });
-    state = reduce(state, { type: 'peers', peers: [peer] });
-    state = reduce(state, { type: 'select-peer', addr: peer.addr });
-    expect(canContinue(state)).toBe(true);
-    expect(selectedGame(state)?.name).toBe('示例游戏');
-    expect(selectedPeer(state)?.addr).toBe('192.168.88.2');
+  it('接上对端后可以进入内容阶段', () => {
+    const state = reduce(initialState, { type: 'peer', peer });
+    expect(connected(state)).toBe(true);
+    expect(canAdvance(state)).toBe(true);
   });
 
-  it('接收角色必须填写对端游戏标识', () => {
-    let state = reduce(initialState, { type: 'peers', peers: [peer] });
-    state = reduce(state, { type: 'select-peer', addr: peer.addr });
-    state = reduce(state, { type: 'role', role: 'receive' });
-    expect(canContinue(state)).toBe(false);
-    state = reduce(state, { type: 'want', value: '123456' });
-    expect(canContinue(state)).toBe(true);
+  it('选中的项可以来回切换，清空后回到未满足', () => {
+    let state = reduce(initialState, { type: 'source', source: 'games' });
+    state = reduce(state, { type: 'games', games: [game] });
+    state = reduce(state, { type: 'toggle-pick', path: game.install_dir });
+    expect(state.picked).toEqual([game.install_dir]);
+    expect(pickedBytes(state)).toBe(4096);
+    state = reduce(state, { type: 'toggle-pick', path: game.install_dir });
+    expect(state.picked).toEqual([]);
+    state = reduce(state, { type: 'toggle-pick', path: game.install_dir });
+    state = reduce(state, { type: 'clear-picks' });
+    expect(state.picked).toEqual([]);
   });
 
-  it('改目标目录会清掉旧预检', () => {
+  it('已选字节数会算上本机目录条目', () => {
     let state = reduce(initialState, {
-      type: 'preview',
-      preview: {
-        title: '示例游戏',
-        root_name: 'demo',
-        total_bytes: 1024,
-        file_count: 2,
-        free_bytes: 4096,
-        need_bytes: 2048,
-        enough: true,
-        has_old_copy: false,
-        advice: '',
+      type: 'entries',
+      entries: [{ name: 'a.bin', path: 'D:/a.bin', is_dir: false, bytes: 1024 }],
+    });
+    state = reduce(state, { type: 'toggle-pick', path: 'D:/a.bin' });
+    expect(pickedBytes(state)).toBe(1024);
+  });
+
+  it('传入请求只在被处理时清空，目标目录独立保存', () => {
+    let state = reduce(initialState, {
+      type: 'incoming',
+      incoming: {
+        id: 7,
+        from: '192.168.88.2:5000',
+        sender_name: 'laptop',
+        total_bytes: 2048,
+        items: [{ name: 'demo', is_dir: true, bytes: 2048 }],
+        want: 'demo',
       },
     });
-    state = reduce(state, { type: 'dest', value: 'E:/games' });
-    expect(state.preview).toBeNull();
-    expect(state.dest).toBe('E:/games');
+    state = reduce(state, { type: 'incoming-dest', value: 'D:/games' });
+    expect(state.incoming?.id).toBe(7);
+    expect(state.incomingDest).toBe('D:/games');
+    state = reduce(state, { type: 'incoming', incoming: null });
+    expect(state.incoming).toBeNull();
   });
 
-  it('出错会结束忙碌状态', () => {
+  it('错误会结束忙碌状态并保留阶段', () => {
     let state = reduce(initialState, { type: 'busy', busy: true });
     state = reduce(state, { type: 'error', message: '连接失败' });
     expect(state.busy).toBe(false);
     expect(state.error).toBe('连接失败');
+    expect(state.stage).toBe('connect');
   });
 
-  it('复位保留目标目录', () => {
-    let state = reduce(initialState, { type: 'dest', value: 'E:/games' });
-    state = reduce(state, { type: 'screen', screen: 'transfer' });
+  it('复位回到连接阶段并保留网络与配对码', () => {
+    let state = reduce(initialState, { type: 'pairing', value: '123456' });
+    state = reduce(state, { type: 'stage', stage: 'transfer' });
     state = reduce(state, { type: 'reset' });
-    expect(state.screen).toBe('scan');
-    expect(state.dest).toBe('E:/games');
-  });
-
-  it('网络状态决定后续用哪个地址', () => {
-    const state = reduce(initialState, {
-      type: 'network',
-      network: {
-        nics: [
-          { name: '以太网', description: 'Gigabit Ethernet', is_physical: true, ip: '192.168.88.1' },
-        ],
-        address: '192.168.88.1',
-        nic_name: '以太网',
-        is_physical: true,
-        direct_link: true,
-        hint: '已配好直连地址',
-      },
-    });
-    expect(state.network?.address).toBe('192.168.88.1');
-    expect(state.network?.direct_link).toBe(true);
-    expect(state.busy).toBe(false);
+    expect(state.stage).toBe('connect');
+    expect(state.pairing).toBe('123456');
   });
 });

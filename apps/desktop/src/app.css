@@ -1,0 +1,107 @@
+@import 'tailwindcss';
+
+/* 机房配线架：深色机架面板底，端口是圆角方孔，状态灯只有四色 */
+@theme {
+  --color-panel: #12161c;
+  --color-panel-rail: #0d1116;
+  --color-panel-edge: #232b36;
+  --color-panel-face: #171d25;
+  --color-panel-hole: #0a0d11;
+  --color-ink: #e8edf5;
+  --color-ink-dim: #93a1b4;
+  --color-ink-faint: #6b7788;
+  --color-lamp-idle: #e0a63c;
+  --color-lamp-ready: #35d39a;
+  --color-lamp-flow: #4c9dff;
+  --color-lamp-fault: #e2604f;
+  /* 面板上的标签字号：小号等宽，读数用表格数字 */
+  --font-mono: 'Cascadia Mono', 'Consolas', ui-monospace, monospace;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--color-panel);
+    color: var(--color-ink);
+    caret-color: var(--color-lamp-flow);
+    font-family: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* 浏览器自带的表面也属于这套世界 */
+  ::selection {
+    background: color-mix(in oklab, var(--color-lamp-flow) 40%, transparent);
+    color: var(--color-ink);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-lamp-flow);
+    outline-offset: 2px;
+  }
+
+  * {
+    scrollbar-color: var(--color-panel-edge) transparent;
+    scrollbar-width: thin;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-panel-edge);
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in oklab, var(--color-lamp-flow) 45%, var(--color-panel-edge));
+    background-clip: content-box;
+  }
+
+  /* 面板读数统一用等宽表格数字，避免跳动 */
+  .reading {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
+  }
+
+  .label {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--color-ink-faint);
+  }
+
+  /* 翻牌：状态变化只重排该行，不做整块动画 */
+  @keyframes flap-in {
+    from {
+      transform: translateY(-46%);
+      opacity: 0;
+    }
+    to {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  }
+
+  .flap {
+    animation: flap-in 140ms steps(3, end) 1;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .flap {
+      animation: none;
+    }
+  }
+}

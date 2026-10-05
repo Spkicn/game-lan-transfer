@@ -13,11 +13,12 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use gamelift_core::net::client::{self, RecvOptions};
+use gamelift_core::net::client::{self, Layout, RecvOptions};
 use gamelift_core::net::discovery::{self, Peer};
 use gamelift_core::net::paths::{join_within, sanitize_relative};
-use gamelift_core::net::protocol::ClaimFile;
-use gamelift_core::net::server::{self, HostOptions};
+use gamelift_core::net::protocol::{ClaimFile, RequestItem};
+use gamelift_core::net::server::{self, ExtraRoot, HostOptions};
+use gamelift_core::net::session::{self, Decision, RequestListener, TransferRequest};
 use gamelift_core::net::{self, DEFAULT_STREAMS};
 use gamelift_core::{link, Error};
 use gamelift_launchers::adapters;
@@ -134,6 +135,14 @@ struct RunningHost {
     stop: Arc<AtomicBool>,
 }
 
+/// 正在运行的请求监听
+struct Listening {
+    /// 请求监听器
+    listener: Arc<RequestListener>,
+    /// 轮询停止标志
+    stop: Arc<AtomicBool>,
+}
+
 /// 应用共享状态
 #[derive(Default)]
 struct AppState {
@@ -141,6 +150,8 @@ struct AppState {
     host: Mutex<Option<RunningHost>>,
     /// 当前接收任务的取消标志
     cancel: Mutex<Option<Arc<AtomicBool>>>,
+    /// 当前请求监听
+    listening: Mutex<Option<Listening>>,
 }
 
 /// 扫描本机已安装的游戏
@@ -261,6 +272,7 @@ fn start_host(
     let host = server::Host::start(HostOptions {
         root: root.clone(),
         extra_roots: Vec::new(),
+        wrap_root: false,
         bind: SocketAddr::new(ip, net::DEFAULT_SESSION_PORT),
         pairing: Some(pairing.clone()),
         title: title.clone(),
@@ -326,12 +338,18 @@ fn start_recv(
     platform: Option<String>,
     pairing: Option<String>,
     force: bool,
+    into_destination: bool,
 ) -> Result<RecvSummary, String> {
     let addr = parse_peer(&peer)?;
     let dest_parent = PathBuf::from(&dest);
     std::fs::create_dir_all(&dest_parent).map_err(io_text)?;
     let info = client::probe(addr, pairing.as_deref(), &want).map_err(describe)?;
-    let old_root = existing_root(&dest_parent, &info.root_name)?;
+    let old_root = if into_destination {
+        // 直接落进选定目录时，旧副本就在这个目录里面
+        Some(dest_parent.clone())
+    } else {
+        existing_root(&dest_parent, &info.root_name)?
+    };
     let cancel = Arc::new(AtomicBool::new(false));
     *lock(&state.cancel) = Some(Arc::clone(&cancel));
     let options = RecvOptions {
@@ -345,7 +363,11 @@ fn start_recv(
         cancel: Some(Arc::clone(&cancel)),
         force,
         old_root,
-        layout: client::Layout::Wrapper,
+        layout: if into_destination {
+            Layout::IntoDestination
+        } else {
+            Layout::Wrapper
+        },
     };
     let mut last = Instant::now();
     let outcome = client::recv(&options, &mut |stats| {
@@ -490,6 +512,385 @@ fn revert_link() -> Result<(), String> {
     Ok(())
 }
 
+/// 本机目录里的一个条目
+#[derive(Debug, Clone, Serialize)]
+struct LocalEntry {
+    /// 名称
+    name: String,
+    /// 完整路径
+    path: String,
+    /// 是否为文件夹
+    is_dir: bool,
+    /// 字节数，文件夹为 0
+    bytes: u64,
+}
+
+/// 请求监听的启动结果
+#[derive(Debug, Clone, Serialize)]
+struct ListenInfo {
+    /// 监听地址
+    addr: String,
+    /// 监听端口
+    port: u16,
+    /// 配对码，未启用时为空
+    code: Option<String>,
+}
+
+/// 发起传输的结果
+#[derive(Debug, Clone, Serialize)]
+struct SendInfo {
+    /// 源端服务端口
+    port: u16,
+    /// 对端是否同意
+    approved: bool,
+    /// 同意时对端选定的目录
+    dest: Option<String>,
+    /// 拒绝原因或补充说明
+    message: String,
+}
+
+/// 传入请求事件里的一个条目
+#[derive(Debug, Clone, Serialize)]
+struct IncomingItem {
+    /// 顶层名字
+    name: String,
+    /// 是否为文件夹
+    is_dir: bool,
+    /// 字节数
+    bytes: u64,
+}
+
+/// 传入请求事件负载
+#[derive(Debug, Clone, Serialize)]
+struct IncomingEvent {
+    /// 请求编号
+    id: u64,
+    /// 发送方地址
+    from: String,
+    /// 发送方主机名
+    sender_name: String,
+    /// 内容总字节数
+    total_bytes: u64,
+    /// 内容清单
+    items: Vec<IncomingItem>,
+    /// 拉取时使用的内容名
+    want: String,
+}
+
+/// 事件名：收到一条传输请求
+const EVENT_REQUEST: &str = "transfer://request";
+
+/// 列出本机目录内容，不传路径时给出盘符
+///
+/// # Errors
+///
+/// 目录不可读时返回说明
+#[tauri::command]
+fn list_local(path: Option<String>) -> Result<Vec<LocalEntry>, String> {
+    let Some(path) = path.filter(|value| !value.is_empty()) else {
+        return Ok(list_drives());
+    };
+    let dir = PathBuf::from(&path);
+    let entries = std::fs::read_dir(&dir).map_err(io_text)?;
+    let mut out: Vec<LocalEntry> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let metadata = entry.metadata().ok()?;
+            Some(LocalEntry {
+                name: entry.file_name().to_string_lossy().into_owned(),
+                path: entry.path().to_string_lossy().into_owned(),
+                is_dir: metadata.is_dir(),
+                bytes: if metadata.is_file() {
+                    metadata.len()
+                } else {
+                    0
+                },
+            })
+        })
+        .collect();
+    out.sort_by(|left, right| {
+        right
+            .is_dir
+            .cmp(&left.is_dir)
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+    });
+    Ok(out)
+}
+
+/// 盘符列表
+fn list_drives() -> Vec<LocalEntry> {
+    ('A'..='Z')
+        .filter_map(|letter| {
+            let root = format!("{letter}:\\");
+            PathBuf::from(&root).is_dir().then(|| LocalEntry {
+                name: root.clone(),
+                path: root,
+                is_dir: true,
+                bytes: 0,
+            })
+        })
+        .collect()
+}
+
+/// 开始接收传输请求，请求通过 `transfer://request` 事件送到界面
+///
+/// # Errors
+///
+/// 本机地址不可用或端口被占用时返回说明
+#[tauri::command]
+fn start_listen(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    iface: Option<String>,
+    pairing: Option<String>,
+) -> Result<ListenInfo, String> {
+    stop_listen_inner(&state);
+    let ip = local_ip(iface.as_deref())?;
+    let code = pairing.filter(|value| !value.is_empty());
+    let listener = Arc::new(
+        RequestListener::start(SocketAddr::new(ip, session::REQUEST_PORT), code.clone())
+            .map_err(describe)?,
+    );
+    let addr = listener.local_addr();
+    let stop = Arc::new(AtomicBool::new(false));
+    let thread_listener = Arc::clone(&listener);
+    let thread_stop = Arc::clone(&stop);
+    let thread_app = app.clone();
+    thread::Builder::new()
+        .name("gamelift-request-poll".to_owned())
+        .spawn(move || {
+            while !thread_stop.load(Ordering::Relaxed) {
+                let Some(incoming) = thread_listener.poll(Duration::from_millis(300)) else {
+                    continue;
+                };
+                let items = incoming
+                    .request
+                    .items
+                    .iter()
+                    .map(|item| IncomingItem {
+                        name: item.name.clone(),
+                        is_dir: item.is_dir,
+                        bytes: item.bytes,
+                    })
+                    .collect();
+                let _ = thread_app.emit(
+                    EVENT_REQUEST,
+                    IncomingEvent {
+                        id: incoming.id,
+                        from: incoming.from.to_string(),
+                        sender_name: incoming.request.sender_name.clone(),
+                        total_bytes: incoming.request.total_bytes,
+                        items,
+                        want: incoming.request.want.clone(),
+                    },
+                );
+            }
+        })
+        .map_err(io_text)?;
+    *lock(&state.listening) = Some(Listening { listener, stop });
+    Ok(ListenInfo {
+        addr: ip.to_string(),
+        port: addr.port(),
+        code,
+    })
+}
+
+/// 停止接收请求
+#[tauri::command]
+fn stop_listen(state: State<'_, AppState>) {
+    stop_listen_inner(&state);
+}
+
+/// 停掉当前监听并等轮询线程退出
+fn stop_listen_inner(state: &AppState) {
+    if let Some(listening) = lock(&state.listening).take() {
+        listening.stop.store(true, Ordering::Relaxed);
+    }
+}
+
+/// 回应一条传入请求
+///
+/// # Errors
+///
+/// 没有在监听、请求已失效或未给出目标目录时返回说明
+#[tauri::command]
+fn respond_request(
+    state: State<'_, AppState>,
+    id: u64,
+    accepted: bool,
+    dest: Option<String>,
+) -> Result<(), String> {
+    let decision = if accepted {
+        let dest = dest
+            .filter(|value| !value.is_empty())
+            .ok_or("请先选择目标文件夹")?;
+        Decision::Approve { dest }
+    } else {
+        Decision::Reject {
+            reason: "对端拒绝了这次传输".to_owned(),
+        }
+    };
+    let guard = lock(&state.listening);
+    let Some(listening) = guard.as_ref() else {
+        return Err("当前没有在等待接收".to_owned());
+    };
+    listening.listener.respond(id, &decision).map_err(describe)
+}
+
+/// 把选中的内容托管起来并向对端发起传输请求
+///
+/// # Errors
+///
+/// 内容不存在、端口被占用或对端不可达时返回说明
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn start_send(
+    state: State<'_, AppState>,
+    peer: String,
+    items: Vec<String>,
+    pairing: Option<String>,
+    iface: Option<String>,
+) -> Result<SendInfo, String> {
+    let Some(first) = items.first() else {
+        return Err("请先选择要发送的内容".to_owned());
+    };
+    stop_running_host(&state);
+    let ip = local_ip(iface.as_deref())?;
+    let root = PathBuf::from(first);
+    if !root.exists() {
+        return Err(format!("内容不存在: {}", root.display()));
+    }
+    let root_name = root
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .ok_or_else(|| "无法确定顶层名字".to_owned())?;
+    let mut extras = Vec::new();
+    for item in items.iter().skip(1) {
+        let path = PathBuf::from(item);
+        if !path.exists() {
+            return Err(format!("内容不存在: {}", path.display()));
+        }
+        let Some(name) = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+        else {
+            continue;
+        };
+        extras.push(ExtraRoot { name, path });
+    }
+    let code = pairing
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(discovery::new_pairing_code);
+    let host = server::Host::start(HostOptions {
+        root: root.clone(),
+        extra_roots: extras,
+        wrap_root: true,
+        bind: SocketAddr::new(ip, net::DEFAULT_SESSION_PORT),
+        pairing: Some(code.clone()),
+        title: root_name.clone(),
+        platform: "files".to_owned(),
+        root_name: Some(root_name.clone()),
+        claim_files: Vec::new(),
+        chunk_bytes: net::DEFAULT_CHUNK_BYTES,
+    })
+    .map_err(describe)?;
+    let port = host.local_addr().port();
+    let stop = Arc::new(AtomicBool::new(false));
+    let announce = Peer {
+        instance: discovery::new_instance(),
+        name: discovery::local_name(),
+        addr: ip,
+        session_port: port,
+        platform: discovery::local_platform(),
+        free_bytes: link::free_bytes_at(&root).unwrap_or(0),
+        pairing_required: true,
+    };
+    spawn_announcer(ip, announce, Arc::clone(&stop))?;
+    *lock(&state.host) = Some(RunningHost {
+        inner: Mutex::new(host),
+        stop,
+    });
+
+    // 汇总待传条目并发出请求
+    let mut summaries = Vec::with_capacity(items.len());
+    let mut total = 0u64;
+    for item in &items {
+        let path = PathBuf::from(item);
+        let bytes = path_size(&path);
+        total = total.saturating_add(bytes);
+        summaries.push(RequestItem {
+            name: path
+                .file_name()
+                .map_or_else(|| item.clone(), |name| name.to_string_lossy().into_owned()),
+            is_dir: path.is_dir(),
+            bytes,
+        });
+    }
+    let request = TransferRequest {
+        sender_name: discovery::local_name(),
+        items: summaries,
+        total_bytes: total,
+        transfer_port: port,
+        pairing: Some(code.clone()),
+        want: root_name,
+    };
+    let request_addr = parse_peer_with_default(&peer, session::REQUEST_PORT)?;
+    let decision = session::request_transfer(request_addr, &request, session::ANSWER_TIMEOUT)
+        .map_err(describe)?;
+    Ok(match decision {
+        Decision::Approve { dest } => SendInfo {
+            port,
+            approved: true,
+            dest: Some(dest),
+            message: format!("对端已同意，配对码 {code}"),
+        },
+        Decision::Reject { reason } => SendInfo {
+            port,
+            approved: false,
+            dest: None,
+            message: reason,
+        },
+    })
+}
+
+/// 源端已下发的字节数，供界面显示发送进度
+#[tauri::command]
+fn send_progress(state: State<'_, AppState>) -> u64 {
+    let guard = lock(&state.host);
+    guard
+        .as_ref()
+        .and_then(|running| running.inner.lock().ok().map(|host| host.bytes_sent()))
+        .unwrap_or(0)
+}
+
+/// 目录或文件的字节数，目录递归求和
+fn path_size(path: &Path) -> u64 {
+    if path.is_file() {
+        return std::fs::metadata(path).map_or(0, |meta| meta.len());
+    }
+    let mut total = 0u64;
+    let mut stack = vec![path.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_symlink() {
+                continue;
+            }
+            if kind.is_dir() {
+                stack.push(entry.path());
+                continue;
+            }
+            total = total.saturating_add(entry.metadata().map_or(0, |meta| meta.len()));
+        }
+    }
+    total
+}
+
 fn main() {
     let result = tauri::Builder::default()
         .manage(AppState::default())
@@ -504,7 +905,13 @@ fn main() {
             default_dest,
             network_status,
             setup_link,
-            revert_link
+            revert_link,
+            list_local,
+            start_listen,
+            stop_listen,
+            respond_request,
+            start_send,
+            send_progress
         ])
         .run(tauri::generate_context!());
     if let Err(err) = result {
@@ -532,19 +939,28 @@ fn local_ip(explicit: Option<&str>) -> Result<IpAddr, String> {
         .map_err(|_| format!("网口地址不合法: {}", picked.ip))
 }
 
-/// 解析对端地址，接受 `IP` 或 `IP:端口`
+/// 解析对端地址，接受 `IP` 或 `IP:端口`，未给端口时用传输端口
 ///
 /// # Errors
 ///
 /// 地址不可解析时返回说明
 fn parse_peer(peer: &str) -> Result<SocketAddr, String> {
+    parse_peer_with_default(peer, net::DEFAULT_SESSION_PORT)
+}
+
+/// 解析对端地址，未给端口时用调用方指定的默认端口
+///
+/// # Errors
+///
+/// 地址不可解析时返回说明
+fn parse_peer_with_default(peer: &str, default_port: u16) -> Result<SocketAddr, String> {
     if let Ok(addr) = peer.parse::<SocketAddr>() {
         return Ok(addr);
     }
     let ip: IpAddr = peer
         .parse()
         .map_err(|_| format!("对端地址不合法: {peer}，示例 192.168.88.2"))?;
-    Ok(SocketAddr::new(ip, net::DEFAULT_SESSION_PORT))
+    Ok(SocketAddr::new(ip, default_port))
 }
 
 /// 目标机上已有的同内容副本路径

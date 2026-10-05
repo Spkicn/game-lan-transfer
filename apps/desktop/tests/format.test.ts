@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  endpointText,
   formatBytes,
   formatDuration,
   formatEta,
   formatRate,
   percent,
   spaceAdvice,
-} from '../src/format';
+} from '../src/lib/format';
 
 describe('formatBytes', () => {
   it('按 1024 进制换算', () => {
@@ -26,9 +27,9 @@ describe('formatBytes', () => {
 });
 
 describe('formatRate', () => {
-  it('速率为零时提示计算中', () => {
-    expect(formatRate(0)).toBe('计算中');
-    expect(formatRate(Number.POSITIVE_INFINITY)).toBe('计算中');
+  it('速率为零时提示待测', () => {
+    expect(formatRate(0)).toBe('待测');
+    expect(formatRate(Number.POSITIVE_INFINITY)).toBe('待测');
   });
 
   it('正常速率带单位', () => {
@@ -52,7 +53,7 @@ describe('formatDuration', () => {
 describe('formatEta', () => {
   it('按剩余量与速率估算', () => {
     expect(formatEta(0, 2048, 1024)).toBe('2 秒');
-    expect(formatEta(1024, 2048, 0)).toBe('计算中');
+    expect(formatEta(1024, 2048, 0)).toBe('待测');
   });
 });
 
@@ -70,16 +71,22 @@ describe('percent', () => {
 
 describe('spaceAdvice', () => {
   it('空间充足时给出剩余量', () => {
-    expect(spaceAdvice(4096, 2048)).toContain('空间充足');
+    expect(spaceAdvice(4096, 2048)).toContain('空间够用');
   });
 
   it('空间不足时给出缺口', () => {
     const advice = spaceAdvice(1024, 4096);
-    expect(advice).toContain('空间不足');
     expect(advice).toContain('还差');
   });
 
   it('无需空间时不提示', () => {
     expect(spaceAdvice(1024, 0)).toBe('');
+  });
+});
+
+describe('endpointText', () => {
+  it('端口为零时只显示地址', () => {
+    expect(endpointText('192.168.88.2', 0)).toBe('192.168.88.2');
+    expect(endpointText('192.168.88.2', 27101)).toBe('192.168.88.2:27101');
   });
 });

@@ -555,7 +555,11 @@ function TransferStage({
                 key={item.name}
                 selected={false}
                 title={item.name}
-                meta={state.role === 'receive' ? '来自对端' : `发往 ${state.sendResult?.dest ?? '对端'}`}
+                meta={
+                  state.role === 'receive'
+                    ? '来自对端'
+                    : item.source ?? `发往 ${state.sendResult?.dest ?? '对端'}`
+                }
                 reading={formatBytes(item.bytes)}
                 state={
                   <span

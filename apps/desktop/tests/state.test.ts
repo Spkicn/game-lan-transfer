@@ -109,8 +109,8 @@ describe('三阶段状态机', () => {
     state = reduce(state, { type: 'toggle-pick', path: game.install_dir });
     state = reduce(state, { type: 'toggle-pick', path: 'D:/a.bin' });
     expect(pickedItems(state)).toEqual([
-      { name: 'demo', bytes: 4096 },
-      { name: 'a.bin', bytes: 1024 },
+      { name: 'demo', bytes: 4096, source: 'D:/games/demo' },
+      { name: 'a.bin', bytes: 1024, source: 'D:/a.bin' },
     ]);
   });
 

@@ -88,6 +88,7 @@
       "title": { "displayName": "内容名", "purpose": "面板行里的游戏名或文件夹名" },
       "body": { "displayName": "正文", "purpose": "说明句、按钮文字、输入值" },
       "reading": { "displayName": "读数", "purpose": "速率、剩余时间、已传字节、地址与端口" },
+      "meta": { "displayName": "次级读数", "purpose": "行的第二行、次级地址与状态条补充说明" },
       "label": { "displayName": "标签", "purpose": "机位标签、阶段页签、状态字" },
       "readout": { "displayName": "大读数", "purpose": "待发清单总量，一屏一个" }
     },

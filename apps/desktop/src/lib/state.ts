@@ -109,6 +109,8 @@ export type TransferRole = 'send' | 'receive';
 export interface TransferItem {
   name: string;
   bytes: number;
+  /** 本机这一侧的来源路径，接收方没有 */
+  source?: string;
 }
 
 /** 界面状态 */
@@ -301,6 +303,7 @@ export function pickedItems(state: AppState): TransferItem[] {
     return {
       name: path.split(/[\\/]/).pop() ?? path,
       bytes: game?.size_bytes ?? local?.bytes ?? 0,
+      source: path,
     };
   });
 }

@@ -39,6 +39,13 @@ typography:
     lineHeight: 1.4
     letterSpacing: "0.02em"
     fontFeature: "tnum"
+  meta:
+    fontFamily: "Cascadia Mono, Consolas, ui-monospace, monospace"
+    fontSize: "12px"
+    fontWeight: 400
+    lineHeight: 1.4
+    letterSpacing: "0.02em"
+    fontFeature: "tnum"
   label:
     fontFamily: "Cascadia Mono, Consolas, ui-monospace, monospace"
     fontSize: "11px"
@@ -188,6 +195,7 @@ components:
 - **Title**（600，15px，行高 1.4）：面板行里的内容名。
 - **Body**（400，14px，行高 1.5）：说明句、按钮文字、输入值。正文行宽不超过 75ch。
 - **Reading**（400，13px，行高 1.4，字距 0.02em，表格数字）：速率、剩余时间、已传字节、地址与端口。
+- **Meta**（400，12px，行高 1.4，表格数字）：行的第二行、次级地址与状态条的补充说明。比 Reading 低一级，只放可以扫过不看的信息。
 - **Label**（400，11px，字距 0.16em，全大写）：机位标签、阶段页签、状态字，一律用等宽。
 
 ### Named Rules

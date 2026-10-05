@@ -1,0 +1,20 @@
+[package]
+name = "gamelift-desktop"
+description = "GameLift 桌面应用：Tauri 壳，只写命令胶水层"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+gamelift-core = { path = "../../../crates/gamelift-core" }
+gamelift-launchers = { path = "../../../crates/gamelift-launchers" }
+
+[lints]
+workspace = true

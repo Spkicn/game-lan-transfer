@@ -4,6 +4,7 @@ members = [
     "crates/gamelift-core",
     "crates/gamelift-launchers",
     "crates/gamelift-cli",
+    "apps/desktop/src-tauri",
 ]
 
 [workspace.package]

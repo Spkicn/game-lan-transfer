@@ -1,15 +1,15 @@
 //! Steam 适配器：扫描 `steamapps` 下的 `appmanifest_*.acf`，
-//! 生成含名称、大小、版本指纹（buildid + depot manifests）的游戏清单。
+//! 生成含名称、大小与版本指纹的游戏清单
 //!
-//! 库定位：优先注册表（HKLM Steam 进程），失败后退回常见路径。
-//! 多库：解析 `libraryfolders.vdf` 的所有 `path`。
+//! 库定位优先查注册表 HKLM 下的 Steam 项，失败后退回常见安装路径
+//! 多库场景解析 `libraryfolders.vdf` 的所有 `path`
 
 use std::path::{Path, PathBuf};
 
 use crate::vdf::{self, VdfValue};
 use crate::{AdapterError, InstalledGame, LauncherAdapter};
 
-/// Steam 平台适配器。
+/// Steam 平台适配器
 pub struct SteamAdapter;
 
 impl LauncherAdapter for SteamAdapter {
@@ -28,16 +28,16 @@ impl LauncherAdapter for SteamAdapter {
     }
 }
 
-/// 定位 Steam 根目录（含 `steamapps` 的上一级）。未安装返回 None。
+/// 定位 Steam 根目录，含 `steamapps` 的上一级；未安装返回 None
 #[must_use]
 pub fn steam_root() -> Option<PathBuf> {
-    // HKLM\SOFTWARE\WOW6432Node\Valve\Steam 的 SteamPath（reg query，无需第三方依赖）
+    // 读 HKLM\SOFTWARE\WOW6432Node\Valve\Steam 的 SteamPath，走 reg query
     if let Some(path) = steam_path_from_registry() {
         if path.join("steamapps").is_dir() {
             return Some(path);
         }
     }
-    // 兜底：常见安装路径
+    // 兜底：注册表不给结果时依次探测常见安装路径
     [
         r"C:\Program Files (x86)\Steam",
         r"C:\Program Files\Steam",
@@ -48,7 +48,7 @@ pub fn steam_root() -> Option<PathBuf> {
     .find(|p| p.join("steamapps").is_dir())
 }
 
-/// 从注册表读 SteamPath。失败（未装/权限）返回 None。
+/// 从注册表读 SteamPath，未安装或无权限时返回 None
 fn steam_path_from_registry() -> Option<PathBuf> {
     let output = std::process::Command::new("reg")
         .args([
@@ -72,7 +72,7 @@ fn steam_path_from_registry() -> Option<PathBuf> {
     path.is_dir().then_some(path)
 }
 
-/// 枚举全部库的 steamapps 目录（含注册在 libraryfolders.vdf 的额外库）。
+/// 枚举全部库的 steamapps 目录，含 libraryfolders.vdf 注册的额外库
 #[must_use]
 fn steam_libraries() -> Vec<PathBuf> {
     let Some(root) = steam_root() else {
@@ -100,7 +100,7 @@ fn steam_libraries() -> Vec<PathBuf> {
     libs
 }
 
-/// 扫描所有库。某库/某清单读取或解析失败时跳过该项并继续（不中断整体扫描）。
+/// 扫描所有库，某库或某清单读取失败时跳过并继续
 fn scan_all_libraries() -> Vec<InstalledGame> {
     let libs = steam_libraries();
     let mut games = Vec::new();
@@ -126,7 +126,7 @@ fn scan_all_libraries() -> Vec<InstalledGame> {
     games
 }
 
-/// 解析一个 acf 文本为 InstalledGame。解析失败返回 None（调用方跳过）。
+/// 解析 acf 文本为 InstalledGame，解析失败返回 None 由调用方跳过
 fn parse_acf(text: &str, steamapps: &Path, appid: &str) -> Option<InstalledGame> {
     let root = vdf::parse(text).ok()?;
     let app = root.get("AppState")?;

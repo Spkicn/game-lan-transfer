@@ -1,20 +1,20 @@
 //! 极简 VDF 文本格式解析器，覆盖 Steam `appmanifest_*.acf` 与
-//! `libraryfolders.vdf` 所需的子集：带引号的键值、嵌套对象、`//` 注释。
-//! Steam 的 acf 键值恒为带引号字符串，故不处理裸 token。
+//! `libraryfolders.vdf` 所需的子集：带引号的键值、嵌套对象、`//` 注释
+//! Steam 的 acf 键值恒为带引号字符串，故不处理裸 token
 
 use std::fmt;
 
-/// VDF 值：字符串或有序键值对对象（acf 中 depot 顺序有意义，故用 Vec 而非 Map）。
+/// VDF 值：字符串或有序键值对对象，acf 中 depot 顺序有意义故用 Vec 而非 Map
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VdfValue {
-    /// 带引号的字符串值。
+    /// 带引号的字符串值
     Str(String),
-    /// 对象：按出现顺序保存的键值对。
+    /// 对象：按出现顺序保存的键值对
     Obj(Vec<(String, VdfValue)>),
 }
 
 impl VdfValue {
-    /// 取对象中第一个匹配键的值。
+    /// 取对象中第一个匹配键的值
     #[must_use]
     pub fn get(&self, key: &str) -> Option<&VdfValue> {
         let VdfValue::Obj(pairs) = self else {
@@ -23,7 +23,7 @@ impl VdfValue {
         pairs.iter().find(|(k, _)| k == key).map(|(_, v)| v)
     }
 
-    /// 作为字符串值取出。
+    /// 作为字符串值取出
     #[must_use]
     pub fn as_str(&self) -> Option<&str> {
         match self {
@@ -33,16 +33,16 @@ impl VdfValue {
     }
 }
 
-/// 解析失败原因。
+/// 解析失败原因
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ParseError {
-    /// 文本在结构中间结束。
+    /// 文本在结构中间结束
     #[error("VDF 意外结束")]
     UnexpectedEof,
-    /// 出现不符合语法的 token。
+    /// 出现不符合语法的 token
     #[error("VDF 意外 token: {0}")]
     UnexpectedToken(String),
-    /// 引号未闭合，或字符串内容不是合法 UTF-8。
+    /// 引号未闭合，或字符串内容不是合法 UTF-8
     #[error("VDF 字符串未闭合或非 UTF-8（起始位置 {0}）")]
     UnterminatedString(usize),
 }
@@ -52,11 +52,11 @@ struct Parser<'a> {
     pos: usize,
 }
 
-/// 解析一段 VDF 文本，返回顶层对象。
+/// 解析一段 VDF 文本，返回顶层对象
 ///
 /// # Errors
 ///
-/// 文本不符合 VDF 语法时返回 [`ParseError`]。
+/// 文本不符合 VDF 语法时返回 [`ParseError`]
 pub fn parse(text: &str) -> Result<VdfValue, ParseError> {
     let mut p = Parser {
         bytes: text.as_bytes(),
@@ -81,8 +81,8 @@ impl Parser<'_> {
         }
     }
 
-    /// 读取一个带引号的字符串（假定当前 pos 指向 `"`）。
-    /// 非转义内容按 UTF-8 透传（acf 偶有非 ASCII 字符，如中文游戏目录名）。
+    /// 读取一个带引号的字符串，假定当前 pos 指向 `"`
+    /// 非转义内容按 UTF-8 透传，acf 可能出现中文游戏目录名
     fn read_quoted(&mut self) -> Result<String, ParseError> {
         let start = self.pos;
         self.pos += 1; // 跳过开头引号
@@ -107,7 +107,7 @@ impl Parser<'_> {
         Err(ParseError::UnterminatedString(start))
     }
 
-    /// 下一个 token：`{`、`}` 或带引号字符串。
+    /// 下一个 token：`{`、`}` 或带引号字符串
     fn next_token(&mut self) -> Result<Option<Token>, ParseError> {
         self.skip_ws_and_comments();
         if self.pos >= self.bytes.len() {
@@ -131,8 +131,7 @@ impl Parser<'_> {
 
     fn parse_object(&mut self) -> Result<VdfValue, ParseError> {
         let mut pairs = Vec::new();
-        // 兼容顶层直接是 `"AppState" { ... }` 的 acf 结构：
-        // 顶层当作隐式对象，遇到单个 key+brace 形式时递归即可。
+        // 顶层直接是 `"AppState" { ... }` 时按隐式对象处理并递归
         while let Some(token) = self.next_token()? {
             match token {
                 Token::CloseBrace => break,
@@ -146,7 +145,7 @@ impl Parser<'_> {
         Ok(VdfValue::Obj(pairs))
     }
 
-    /// 已读到 key，解析其值：`{` 开对象，否则必须是字符串。
+    /// 已读到 key，解析其值：`{` 开对象，否则必须是字符串
     fn parse_value(&mut self) -> Result<VdfValue, ParseError> {
         let Some(token) = self.next_token()? else {
             return Err(ParseError::UnexpectedEof);
@@ -180,7 +179,7 @@ impl fmt::Display for Token {
 mod tests {
     use super::*;
 
-    /// Steam acf 样本，覆盖 appid、installdir、buildid 与 InstalledDepots
+    /// 合成样本：acf 的关键字段结构
     const ACF_SAMPLE: &str = r#"
 "AppState"
 {
@@ -201,7 +200,7 @@ mod tests {
 "#;
 
     #[test]
-    fn parses_real_acf_sample() {
+    fn parses_acf_sample() {
         let v = parse(ACF_SAMPLE).expect("acf must parse");
         let app = v.get("AppState").expect("AppState key");
         assert_eq!(app.get("appid").and_then(VdfValue::as_str), Some("123456"));
@@ -273,7 +272,7 @@ mod tests {
 
     #[test]
     fn stray_close_brace_at_top_is_tolerated() {
-        // 顶层多余的 `}` 按"对象结束"处理，不视为致命错误（Steam 自身产出宽松）
+        // 顶层多余的 `}` 按对象结束处理，Steam 自身产出较宽松
         let v = parse("\"a\" \"1\"\n}").expect("must parse");
         assert_eq!(v.get("a").and_then(VdfValue::as_str), Some("1"));
     }

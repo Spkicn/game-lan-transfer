@@ -1,20 +1,22 @@
-//! 传输引擎：源端临时 SMB 共享、目标端 robocopy 拉取、Steam acf 认领
+//! 传输引擎：源端临时 SMB 共享、目标端 robocopy 拉取与 Steam acf 认领
 //!
-//! 源端建临时只读共享，目标端先做空间预检，再用 robocopy 拉取并写入 acf
-//! 需要 PowerShell 管理员权限的操作失败时，错误信息会提示以管理员身份运行
+//! [`serve`] 在源端建临时只读共享，[`stop_serve`] 删共享
+//! [`pull`] 在目标端做空间预检，再经 robocopy 拉取并写认领文件
+//!
+//! New-SmbShare 与 Remove-SmbShare 需要管理员权限，失败时错误信息会提示以管理员身份运行
 
 use std::path::Path;
 
 use crate::{Error, Result};
 
-/// 临时共享名（清理时按这个名字删）。
+/// 临时共享名，清理时按该名字删除
 pub const SHARE_NAME: &str = "GameLiftXfer";
 
-/// 源端：给一个目录建临时只读 SMB 共享。已存在则先删再建（幂等）。
+/// 源端：给目录建临时只读 SMB 共享，同名共享先删再建
 ///
 /// # Errors
 ///
-/// - [`Error::Shell`]：PowerShell 失败（未提权 / 路径无效）
+/// - [`Error::Shell`]：PowerShell 失败，常见于未提权或路径无效
 /// - [`Error::Io`]：目录不存在
 pub fn serve(path: &Path) -> Result<()> {
     if !path.is_dir() {
@@ -37,11 +39,11 @@ pub fn serve(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// 源端：删临时共享。共享本来就不存在视为成功（幂等）。
+/// 源端：删临时共享，共享不存在时视为成功
 ///
 /// # Errors
 ///
-/// [`Error::Shell`]：PowerShell 失败（未提权）。
+/// [`Error::Shell`]：PowerShell 失败，常见于未提权
 pub fn stop_serve() -> Result<()> {
     let script = format!("Remove-SmbShare -Name {SHARE_NAME} -Force -ErrorAction SilentlyContinue");
     let out = std::process::Command::new("powershell")
@@ -56,20 +58,19 @@ pub fn stop_serve() -> Result<()> {
     Ok(())
 }
 
-/// robocopy 退出码的语义映射（0–7 均为成功，8+ 才是失败）。
+/// robocopy 退出码语义：0–7 成功，8 及以上失败
 #[must_use]
 pub fn robocopy_success(exit_code: i32) -> bool {
     (0..8).contains(&exit_code)
 }
 
-/// 目标端：从对端共享拉取一个游戏目录。
+/// 目标端：从对端共享拉取游戏目录，返回复制字节数
 ///
-/// 步骤：空间预检 → robocopy（/E /Z /MT:16）→ 复制 acf → 写认领说明。
-/// 返回实际复制的字节数（robocopy 统计）。
+/// 先做空间预检，再用 robocopy /E /Z /MT:16 拉取
 ///
 /// # Errors
 ///
-/// - [`Error::InsufficientSpace`]：目标盘空间不足
+/// - [`Error::InsufficientSpace`]：目标盘空间不足，传输前拦截
 /// - [`Error::Shell`]：robocopy 启动失败或退出码 ≥ 8
 /// - [`Error::Io`]：目标目录不可写
 pub fn pull(
@@ -120,13 +121,11 @@ pub fn pull(
     Ok(copied)
 }
 
-/// 从 robocopy 输出统计里解析已复制字节数。
-/// 中英文系统的行前缀不同，但数值都跟在 "字节"/"Bytes" 标签后的行里。
+/// 从 robocopy 输出统计里解析已复制字节数
+/// 中英文系统的行前缀不同，但数值都跟在 "字节"/"Bytes" 标签后的行里
 fn parse_robocopy_bytes(stdout: &str) -> u64 {
-    // robocopy 摘要行样例:
-    //   中文: "   字节:   64.123 m   ..." —— robocopy 用千位分隔与单位缩写，无法直接 parse
-    //   英文: "   Bytes :   64.1 m   ..."
-    // 逐行找含"字节"/"Bytes"的行，取数值段还原
+    // robocopy 摘要行样例：中文 "字节: 64.123 m"，英文 "Bytes : 64.1 m"
+    // 单位缩写无法直接 parse，这里逐行匹配标签后取数值段还原
     for line in stdout.lines() {
         let lower = line.to_ascii_lowercase();
         if lower.contains("bytes:") || line.contains("字节:") || line.contains("字节：") {
@@ -138,7 +137,7 @@ fn parse_robocopy_bytes(stdout: &str) -> u64 {
     0
 }
 
-/// 解析 robocopy 的容量简写（"64.1 m" → 64.1 MiB → 字节）。
+/// 解析 robocopy 的容量简写，如 "64.1 m" 转成字节
 fn parse_size_shorthand(text: &str) -> Option<u64> {
     let text = text.trim();
     let mut num = String::new();
@@ -170,7 +169,7 @@ fn parse_size_shorthand(text: &str) -> Option<u64> {
     }
 }
 
-/// 把 PowerShell 错误输出补上"以管理员身份运行"提示。
+/// 把 PowerShell 错误输出补上"以管理员身份运行"提示
 fn hint_admin(stderr: impl Into<String>) -> String {
     let msg = stderr.into();
     if msg.is_empty() {
@@ -180,35 +179,35 @@ fn hint_admin(stderr: impl Into<String>) -> String {
     }
 }
 
-/// 取文本最后 n 行（错误信息截断用）。
+/// 取文本最后 n 行，用于截断错误信息
 fn tail_text(text: &str, n: usize) -> String {
     let lines: Vec<&str> = text.lines().collect();
     let start = lines.len().saturating_sub(n);
     lines[start..].join("\n")
 }
 
-/// 生成"传完即玩"的收尾指引
+/// 生成传完即玩的收尾指引文本
 #[must_use]
 pub fn claim_instructions(appid: &str, installdir: &str) -> String {
     format!(
-        "传输完成。收尾步骤：\n\
+        "传输完成，收尾步骤：\n\
          1. 确认 steamapps\\appmanifest_{appid}.acf 与 steamapps\\common\\{installdir} 均已就位\n\
          2. 重启 Steam 客户端\n\
          3. 库中右键游戏 → 属性 → 已安装文件 → 验证文件完整性（buildid 一致时应接近零下载）"
     )
 }
 
-/// 源端 steamapps 路径下的 appmanifest 文件名。
+/// 源端 steamapps 路径下的 appmanifest 文件名
 #[must_use]
 pub fn acf_filename(appid: &str) -> String {
     format!("appmanifest_{appid}.acf")
 }
 
-/// 目标端认领：把源端的 acf 原样复制到目标 steamapps
+/// 目标端认领：把源端 acf 原样复制到目标 steamapps
 ///
 /// # Errors
 ///
-/// [`Error::Io`]：读源或写目标失败。
+/// [`Error::Io`]：读源或写目标失败
 pub fn copy_acf(source_acf: &Path, dest_steamapps: &Path, appid: &str) -> Result<()> {
     let content = std::fs::read_to_string(source_acf)
         .map_err(|e| Error::Io(format!("读取 acf 失败: {e}")))?;
@@ -265,7 +264,7 @@ mod tests {
         let copied =
             std::fs::read_to_string(tmp.join("steamapps/appmanifest_123456.acf")).expect("read");
         assert!(copied.contains("123456"));
-        // 覆盖已有 acf（rename 回退路径）
+        // 覆盖已有 acf，走 rename 回退路径
         copy_acf(&src_acf, &tmp.join("steamapps"), "123456").expect("overwrite");
         std::fs::remove_dir_all(&tmp).expect("cleanup");
     }

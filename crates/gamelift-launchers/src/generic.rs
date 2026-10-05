@@ -1,9 +1,9 @@
-//! 通用文件夹适配器：把任意目录当作搬运对象，非游戏内容也能传
+//! 通用文件夹适配器：把任意目录当作搬运对象，非游戏目录也能传
 
 use crate::{AdapterError, InstalledGame, LauncherAdapter};
 
-/// 手动指定文件夹的适配器。不参与 `scan()`（无内容可枚举），
-/// 由 UI/CLI 直接调用 [`GenericAdapter::make_entry`] 生成清单条目。
+/// 手动指定文件夹的适配器，不参与 `scan()`
+/// 由 UI 或 CLI 调用 [`GenericAdapter::make_entry`] 生成清单条目
 pub struct GenericAdapter;
 
 impl LauncherAdapter for GenericAdapter {
@@ -17,12 +17,12 @@ impl LauncherAdapter for GenericAdapter {
 }
 
 impl GenericAdapter {
-    /// 把一个用户指定的目录包装成 `InstalledGame`，供 UI 列表展示。
-    /// 目录不存在时返回 `LauncherNotFound`（复用"找不到"语义）。
+    /// 把一个用户指定的目录包装成 `InstalledGame`，供 UI 列表展示
+    /// 目录不存在时返回 `LauncherNotFound`，复用找不到的语义
     ///
     /// # Errors
     ///
-    /// 路径不是存在的目录时返回 [`AdapterError::LauncherNotFound`]。
+    /// 路径不是存在的目录时返回 [`AdapterError::LauncherNotFound`]
     pub fn make_entry(path: &std::path::Path) -> Result<InstalledGame, AdapterError> {
         if !path.is_dir() {
             return Err(AdapterError::LauncherNotFound {
@@ -41,7 +41,7 @@ impl GenericAdapter {
     }
 }
 
-/// 递归统计目录字节总数。符号链接不跟随（避免循环与重复计数）。
+/// 递归统计目录字节总数，不跟随符号链接以避免循环与重复计数
 fn dir_size(path: &std::path::Path) -> u64 {
     let mut total = 0u64;
     let mut stack = vec![path.to_path_buf()];

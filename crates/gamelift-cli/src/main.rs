@@ -1,13 +1,13 @@
-//! `GameLift` CLI
+//! `GameLift` CLI：扫描游戏库、配置直连、共享与拉取游戏
 //!
 //! 用法：
 //! ```text
-//! gamelift scan                     # 扫描本机游戏库
-//! gamelift nics                     # 列出网口（排查直连问题用）
-//! gamelift link [--host 1|2]        # 配置直连地址（1=台式机端，2=笔记本端）
+//! gamelift scan                     # 扫描本地游戏库
+//! gamelift nics                     # 列出网口，排查直连问题用
+//! gamelift link [--host 1|2]        # 配置直连地址，1 为台式机端，2 为笔记本端
 //! gamelift unlink                   # 还原直连配置
-//! gamelift serve <appid>            # 源端：共享指定 Steam 游戏（管理员）
-//! gamelift stop                     # 源端：删除共享（管理员）
+//! gamelift serve <appid>            # 源端：共享指定 Steam 游戏，需管理员
+//! gamelift stop                     # 源端：删除共享，需管理员
 //! gamelift pull <appid> --peer IP   # 目标端：拉取游戏并认领
 //! ```
 
@@ -52,7 +52,7 @@ fn print_usage() {
         "GameLift —— 游戏局域网直传\n\
          \n\
          用法:\n\
-         \x20 gamelift scan                扫描本机游戏库\n\
+         \x20 gamelift scan                扫描本地游戏库\n\
          \x20 gamelift nics                列出网口\n\
          \x20 gamelift link [--host 1|2]   配置直连地址（需管理员）\n\
          \x20 gamelift unlink              还原直连配置（需管理员）\n\
@@ -106,7 +106,7 @@ fn nics() -> Result<()> {
 }
 
 fn link_cmd(host: Option<&str>) -> Result<()> {
-    // 默认 1（台式机端）；笔记本端传 2
+    // 默认 1 为台式机端，笔记本端传 2
     let octet: u8 = match host {
         None | Some("--host" | "1") => 1,
         Some("2") => 2,
@@ -124,7 +124,7 @@ fn link_cmd(host: Option<&str>) -> Result<()> {
 
 fn unlink_cmd() -> Result<()> {
     link::revert_direct_link(1).context("还原直连配置失败")?;
-    link::revert_direct_link(2).ok(); // 顺手清理另一端的约定地址（本机没配则无操作）
+    link::revert_direct_link(2).ok(); // 顺带清理另一端的约定地址，未配置时静默跳过
     println!("直连配置已还原（DHCP 恢复，无残留地址）");
     Ok(())
 }
@@ -186,7 +186,7 @@ fn pull_cmd(args: &[String]) -> Result<()> {
     }
     let peer = peer.with_context(|| "缺少 --peer（对端 IP，如 192.168.88.2）".to_owned())?;
 
-    // 从对端拉 appmanifest 需要知道 installdir：appid 已在本机清单则复用其 installdir
+    // 从对端拉 appmanifest 需要知道 installdir：本地清单已有该 appid 时复用其 installdir，
     // 否则要求 --dest 显式指定目标目录
     let (remote_relative, dest, estimated) = resolve_pull_target(appid, dest.as_deref())?;
 
@@ -210,12 +210,12 @@ fn pull_cmd(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// 确定 pull 的远端相对路径与本地目标目录。
+/// 确定 pull 的远端相对路径与本地目标目录
 fn resolve_pull_target(
     appid: &str,
     dest: Option<&std::path::Path>,
 ) -> Result<(String, PathBuf, u64)> {
-    // 本机装了同一游戏：直接用它的 installdir/大小
+    // 本地已安装同一游戏时直接复用其 installdir 与大小
     if let Ok(games) = SteamAdapter.scan() {
         if let Some(game) = games
             .iter()
@@ -230,10 +230,10 @@ fn resolve_pull_target(
             return Ok((installdir, dest, game.size_bytes));
         }
     }
-    // 未装：要求 --dest 显式指定目标目录
+    // 未安装时要求传 --dest 指定目标目录
     let Some(dest) = dest else {
         bail!(
-            "本机未安装 appid {appid}，无法推断 installdir。\n\
+            "本地未安装 appid {appid}，无法推断 installdir。\n\
              两种解法:\n\
              \x20 1. 传 --dest 指定目标目录（ Steam 侧为 <steamapps>\\common\\<游戏目录> ）\n\
              \x20 2. 在源端运行 gamelift scan 查看 installdir 后填入"
@@ -242,8 +242,8 @@ fn resolve_pull_target(
     Ok((".".to_owned(), dest.to_path_buf(), 0))
 }
 
-/// 人类可读的容量。
-/// u64→f64 的精度损失对展示无影响。
+/// 人类可读的容量
+/// u64→f64 的精度损失对展示无影响
 #[allow(clippy::cast_precision_loss)]
 fn human_size(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];

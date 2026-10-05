@@ -1,27 +1,28 @@
-//! 直连自举：识别物理以太网口、配置静态地址、还原
+//! 直连自举：识别物理以太网口、配置不设网关的静态 IP、还原网络配置
 //!
-//! 网络配置走 PowerShell，提权由调用方负责；已有可用 IPv4 的网口跳过
+//! 改网络配置的操作走 PowerShell，UAC 由调用方负责；只读查询也用 PowerShell 一次取齐
+//! 只对当前未配置的网口动作，已有可用 IPv4 的网口跳过
 
 use crate::{Error, Result};
 
-/// 直连网段，默认 192.168.88.0/24
+/// 直连网段 192.168.88.0/24
 pub const LINK_SUBNET_PREFIX: &str = "192.168.88";
 
-/// 一个候选网口的描述。
+/// 一个候选网口的描述
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Nic {
-    /// Windows 网络连接名，如 "以太网"。
+    /// Windows 网络连接名，如 "以太网"
     pub name: String,
-    /// 硬件描述，如 "Intel(R) Ethernet Connection I219-V"。
+    /// 网卡硬件描述，取自 Windows `InterfaceDescription`
     pub description: String,
-    /// 是否为物理以太网口（已排除虚拟网卡与 WLAN）。
+    /// 是否为物理以太网口，虚拟网卡与 WLAN 已排除
     pub is_physical: bool,
-    /// 现有 IPv4 地址（LinkLocal 169.254 除外）。None = 未配置。
+    /// 现有 IPv4 地址，`LinkLocal` 169.254 除外；None 表示未配置
     pub current_ipv4: Option<String>,
 }
 
-/// 罗列所有网口。单次 PowerShell 调用取齐名称、描述、IP（无需管理员）。
-/// 输出编码显式设为 UTF-8，避免中文 Windows 控制台 GBK 乱码。
+/// 罗列所有网口，单次 PowerShell 调用取齐名称、描述与 IP
+/// 输出编码显式设为 UTF-8，避免中文 Windows 控制台乱码
 #[must_use]
 pub fn list_nics() -> Vec<Nic> {
     let ps = "[Console]::OutputEncoding=[Text.Encoding]::UTF8; \
@@ -58,8 +59,8 @@ pub fn list_nics() -> Vec<Nic> {
     nics
 }
 
-/// 拆 `名称|描述|IP` 行（从右取：最后一段是 IP，IP 可为空）。
-/// 描述不含 `|`（`InterfaceDescription` 实际不含）；万一含，靠 rsplitn 保证 IP 仍正确。
+/// 拆 `名称|描述|IP` 行，最后一段是 IP 且允许为空
+/// 描述若含 `|`，靠 rsplitn 保证 IP 仍取最后一段
 fn split_nic_line(line: &str) -> Option<(String, String, Option<String>)> {
     let (head, ip_raw) = line.rsplit_once('|')?;
     let (name_raw, desc_raw) = head.split_once('|')?;
@@ -71,7 +72,7 @@ fn split_nic_line(line: &str) -> Option<(String, String, Option<String>)> {
     Some((name_raw.trim().to_owned(), desc_raw.trim().to_owned(), ip))
 }
 
-/// 物理以太网判定：按名称与描述排除虚拟网卡和无线网卡
+/// 物理以太网口判定：名称或描述命中虚拟网卡、无线标记即排除
 fn is_physical_ethernet(name: &str, description: &str) -> bool {
     let d = format!("{name} {description}").to_ascii_lowercase();
     let virtual_markers = [
@@ -106,14 +107,14 @@ fn is_physical_ethernet(name: &str, description: &str) -> bool {
         || d.contains("gbe family")
 }
 
-/// 给第一个物理以太网口配置直连地址（不设网关、网络位置设"专用"）。
+/// 给第一个物理以太网口配置直连地址，不设网关并把网络位置设为专用
 ///
-/// 若该网口已有同网段地址则视为已配置，直接返回，不盲目覆盖
+/// 网口已有同网段地址时视为已配置并直接返回
 ///
 /// # Errors
 ///
 /// - [`Error::NicNotFound`]：找不到物理以太网口
-/// - [`Error::Shell`]：PowerShell 执行失败（常见原因：未以管理员运行）
+/// - [`Error::Shell`]：PowerShell 执行失败，通常是未以管理员运行
 pub fn setup_direct_link(host_octet: u8) -> Result<String> {
     let Some(nic) = list_nics().into_iter().find(|n| n.is_physical) else {
         return Err(Error::NicNotFound);
@@ -141,11 +142,11 @@ pub fn setup_direct_link(host_octet: u8) -> Result<String> {
     Ok(ip)
 }
 
-/// 还原直连配置：删除本工具配置的 192.168.88.x 地址并恢复 DHCP
+/// 还原直连配置：删本工具配置的 192.168.88.x 地址并恢复 DHCP
 ///
 /// # Errors
 ///
-/// [`Error::Shell`]：PowerShell 执行失败（常见原因：未以管理员运行）。
+/// [`Error::Shell`]：PowerShell 执行失败，通常是未以管理员运行
 pub fn revert_direct_link(host_octet: u8) -> Result<()> {
     let ip = format!("{LINK_SUBNET_PREFIX}.{host_octet}");
     let mut last_err = String::new();
@@ -179,17 +180,17 @@ pub fn revert_direct_link(host_octet: u8) -> Result<()> {
     }
 }
 
-/// 对端地址（同网段另一台机器约定用对方 octet）。
+/// 对端地址，约定同网段另一台机器使用对方 octet
 #[must_use]
 pub fn peer_ip(host_octet: u8) -> String {
     format!("{LINK_SUBNET_PREFIX}.{host_octet}")
 }
 
-/// 目标盘剩余空间（字节）。`drive` 接受 "C" 或 "C:\" 形式。
+/// 目标盘剩余空间，单位字节；`drive` 接受 "C" 或 "C:\" 形式
 ///
 /// # Errors
 ///
-/// 盘符无效或查询失败时返回 [`Error::Io`]。
+/// 盘符无效或查询失败时返回 [`Error::Io`]
 pub fn free_bytes(drive: &str) -> Result<u64> {
     let root = if drive.len() == 1 {
         format!("{drive}:\\")
@@ -209,7 +210,7 @@ mod tests {
     fn physical_ethernet_detection() {
         assert!(is_physical_ethernet(
             "以太网",
-            "Intel(R) Ethernet Controller I225-V"
+            "Gigabit Ethernet Controller"
         ));
         assert!(is_physical_ethernet(
             "Ethernet",
@@ -265,9 +266,9 @@ mod tests {
 
     #[test]
     fn list_nics_runs_without_panic() {
-        // 不做内容断言（CI 无网卡环境差异大），只验证结构完整
+        // CI 环境网卡差异大，不做内容断言，只验证结构完整
         for nic in list_nics() {
-            assert!(!nic.name.is_empty());
+            assert_ne!(nic.name, "");
         }
     }
 

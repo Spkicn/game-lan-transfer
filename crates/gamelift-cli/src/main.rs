@@ -1,4 +1,4 @@
-//! `GameLift` CLI：扫描游戏库、配置直连、共享与拉取游戏
+//! `GameLift` CLI：扫描游戏库、配置直连、搬运游戏
 //!
 //! 用法：
 //! ```text
@@ -6,17 +6,31 @@
 //! gamelift nics                     # 列出网口，排查直连问题用
 //! gamelift link [--host 1|2]        # 配置直连地址，1 为台式机端，2 为笔记本端
 //! gamelift unlink                   # 还原直连配置
-//! gamelift serve <appid>            # 源端：共享指定 Steam 游戏，需管理员
+//! gamelift peers [--iface IP]       # 发现直连网段里的对端
+//! gamelift host <appid> [--dir 路径] [--code NNNNNN]
+//!                                   # 源端：启动分块传输服务，无需管理员
+//! gamelift recv <appid> --peer IP [--code NNNNNN] [--dest 路径]
+//!                                   # 目标端：接收并认领
+//! gamelift serve <appid>            # 源端：共享指定 Steam 游戏，需管理员，SMB 兜底
 //! gamelift stop                     # 源端：删除共享，需管理员
-//! gamelift pull <appid> --peer IP   # 目标端：拉取游戏并认领
+//! gamelift pull <appid> --peer IP   # 目标端：走 SMB 拉取，需管理员，SMB 兜底
 //! ```
 
-use std::path::PathBuf;
+use std::io::Write as _;
+use std::net::{IpAddr, SocketAddr};
+use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::{Duration, Instant};
 
-use anyhow::{bail, Context, Result};
-use gamelift_core::{link, transfer};
+use anyhow::{anyhow, bail, Context, Result};
+use gamelift_core::net::client::{self, RecvOptions};
+use gamelift_core::net::discovery::{self, Peer};
+use gamelift_core::net::protocol::ClaimFile;
+use gamelift_core::net::server::{self, HostOptions};
+use gamelift_core::net::{self, DEFAULT_STREAMS};
+use gamelift_core::{link, transfer, TransferStats};
 use gamelift_launchers::adapters;
-use gamelift_launchers::steam::SteamAdapter;
+use gamelift_launchers::steam::{self, SteamAdapter};
 use gamelift_launchers::LauncherAdapter as _;
 
 fn main() {
@@ -36,6 +50,9 @@ fn run() -> Result<()> {
         Some("serve") => serve_cmd(args.get(1).map(String::as_str)),
         Some("stop") => stop_cmd(),
         Some("pull") => pull_cmd(&args[1..]),
+        Some("peers") => peers_cmd(&args[1..]),
+        Some("host") => host_cmd(&args[1..]),
+        Some("recv") => recv_cmd(&args[1..]),
         Some("help") | None => {
             print_usage();
             Ok(())
@@ -56,10 +73,15 @@ fn print_usage() {
          \x20 gamelift nics                列出网口\n\
          \x20 gamelift link [--host 1|2]   配置直连地址（需管理员）\n\
          \x20 gamelift unlink              还原直连配置（需管理员）\n\
-         \x20 gamelift serve <appid>       源端：共享该 Steam 游戏（需管理员）\n\
+         \x20 gamelift peers [--seconds N] 发现直连网段里的对端\n\
+         \x20 gamelift host <appid> [--dir <路径>] [--code NNNNNN] [--iface <本机IP>]\n\
+         \x20                              源端：启动分块传输服务\n\
+         \x20 gamelift recv <appid> --peer <IP> [--code NNNNNN] [--dest <路径>] [--streams N] [--force]\n\
+         \x20                              目标端：接收并认领\n\
+         \x20 gamelift serve <appid>       源端：共享该 Steam 游戏（需管理员，SMB 兜底）\n\
          \x20 gamelift stop                源端：删除共享（需管理员）\n\
          \x20 gamelift pull <appid> --peer <IP> [--drive D] [--dest <路径>]\n\
-         \x20                              目标端：拉取游戏并给出认领指引"
+         \x20                              目标端：走 SMB 拉取并给出认领指引"
     );
 }
 
@@ -240,6 +262,307 @@ fn resolve_pull_target(
         );
     };
     Ok((".".to_owned(), dest.to_path_buf(), 0))
+}
+
+/// 发现直连网段里的对端
+fn peers_cmd(args: &[String]) -> Result<()> {
+    let seconds = parse_flag(args, "--seconds")?.unwrap_or(5);
+    let local_ip = resolve_iface(flag_value(args, "--iface"))?;
+    let socket =
+        discovery::bind(local_ip, discovery::DISCOVERY_PORT).context("绑定发现端口失败")?;
+    println!("在 {local_ip} 上监听发现广播，最多 {seconds} 秒…");
+    let peers =
+        discovery::collect(&socket, Duration::from_secs(seconds), None).context("收集公告失败")?;
+    if peers.is_empty() {
+        println!("未发现对端。请确认对端已运行 gamelift host，且两端在同一网段。");
+        return Ok(());
+    }
+    println!(
+        "{:<20} {:<24} {:<10} {:>12}  配对",
+        "名称", "地址", "平台", "可用空间"
+    );
+    for peer in peers {
+        let address = format!("{}:{}", peer.addr, peer.session_port);
+        let pairing = if peer.pairing_required {
+            "需要"
+        } else {
+            "不需要"
+        };
+        println!(
+            "{:<20} {:<24} {:<10} {:>12}  {pairing}",
+            peer.name,
+            address,
+            peer.platform,
+            human_size(peer.free_bytes)
+        );
+    }
+    Ok(())
+}
+
+/// 源端：启动分块传输服务并持续广播
+fn host_cmd(args: &[String]) -> Result<()> {
+    let target = args
+        .first()
+        .filter(|arg| !arg.starts_with("--"))
+        .cloned()
+        .context("用法: gamelift host <appid> [--dir <路径>] [--code NNNNNN] [--iface <本机IP>]")?;
+    let bind_ip = resolve_iface(flag_value(args, "--iface"))?;
+    let port = parse_flag(args, "--port")?.unwrap_or(net::DEFAULT_SESSION_PORT);
+    let pairing =
+        flag_value(args, "--code").map_or_else(discovery::new_pairing_code, str::to_owned);
+
+    let (root, title, platform, root_name, claim_files) = match flag_value(args, "--dir") {
+        Some(dir) => {
+            let path = PathBuf::from(dir);
+            let name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .with_context(|| format!("无法从路径推断目录名: {}", path.display()))?;
+            (path, name.clone(), "generic".to_owned(), name, Vec::new())
+        }
+        None => resolve_steam_source(&target)?,
+    };
+    let free_bytes = link::free_bytes_at(&root).unwrap_or(0);
+    let host = server::Host::start(HostOptions {
+        root: root.clone(),
+        bind: SocketAddr::new(bind_ip, port),
+        pairing: Some(pairing.clone()),
+        title: title.clone(),
+        platform: platform.clone(),
+        root_name: Some(root_name.clone()),
+        claim_files,
+        chunk_bytes: net::DEFAULT_CHUNK_BYTES,
+    })
+    .context("启动传输服务失败，检查端口是否被占用")?;
+
+    println!("内容: {title}（目录 {root_name}）");
+    println!("监听: {bind_ip}:{}", host.local_addr().port());
+    println!("配对码: {pairing}");
+    println!("对端执行: gamelift recv {target} --peer {bind_ip} --code {pairing}");
+    println!("按 Ctrl+C 停止");
+
+    let socket = discovery::bind(bind_ip, 0).context("创建广播套接字失败")?;
+    let peer = Peer {
+        instance: discovery::new_instance(),
+        name: discovery::local_name(),
+        addr: bind_ip,
+        session_port: host.local_addr().port(),
+        platform,
+        free_bytes,
+        pairing_required: true,
+    };
+    let broadcast = broadcast_target(bind_ip);
+    let mut warned = false;
+    loop {
+        if let Err(err) = discovery::announce_to(&socket, broadcast, &peer) {
+            if !warned {
+                warned = true;
+                eprintln!("广播公告失败，对端仍可用 --peer 手动指定地址: {err}");
+            }
+        }
+        thread::sleep(Duration::from_secs(1));
+    }
+}
+
+/// 目标端：接收内容并写入认领文件
+fn recv_cmd(args: &[String]) -> Result<()> {
+    let want = args
+        .first()
+        .filter(|arg| !arg.starts_with("--"))
+        .cloned()
+        .context(
+            "用法: gamelift recv <appid|目录名> --peer <IP> [--code NNNNNN] [--dest <路径>]",
+        )?;
+    let peer_ip: IpAddr = flag_value(args, "--peer")
+        .context("缺少 --peer（源端地址，如 192.168.88.2）")?
+        .parse()
+        .context("--peer 需要 IP 地址")?;
+    let port = parse_flag(args, "--port")?.unwrap_or(net::DEFAULT_SESSION_PORT);
+    let streams = parse_flag(args, "--streams")?.unwrap_or(DEFAULT_STREAMS);
+    let (dest_parent, claim_root) = resolve_recv_dest(flag_value(args, "--dest"), &want)?;
+    let options = RecvOptions {
+        peer: SocketAddr::new(peer_ip, port),
+        pairing: flag_value(args, "--code").map(str::to_owned),
+        want: want.clone(),
+        dest_parent: dest_parent.clone(),
+        claim_root,
+        streams,
+        chunk_bytes: net::DEFAULT_CHUNK_BYTES,
+        cancel: None,
+        force: has_flag(args, "--force"),
+    };
+    println!(
+        "从 {peer_ip}:{port} 接收 {want}，目标 {}，并发 {streams}",
+        dest_parent.display()
+    );
+    let mut last: Option<Instant> = None;
+    let outcome = client::recv(&options, &mut |stats| {
+        let due = last.is_none_or(|mark| mark.elapsed() >= Duration::from_secs(1));
+        if due {
+            last = Some(Instant::now());
+            print!("\r{}", progress_line(stats));
+            let _ = std::io::stdout().flush();
+        }
+    })
+    .context("接收失败")?;
+    println!();
+    println!(
+        "已接收 {} → {}",
+        human_size(outcome.bytes_total),
+        outcome.root.display()
+    );
+    if outcome.bytes_resumed > 0 {
+        println!("其中续传跳过 {}", human_size(outcome.bytes_resumed));
+    }
+    for path in &outcome.claim_files {
+        println!("已写入认领文件 {}", path.display());
+    }
+    if outcome.claim_files.is_empty() {
+        println!();
+        println!("{}", transfer::claim_instructions(&want, "内容目录"));
+    }
+    Ok(())
+}
+
+/// 定位源端的 Steam 游戏目录与清单文件
+fn resolve_steam_source(appid: &str) -> Result<(PathBuf, String, String, String, Vec<ClaimFile>)> {
+    let games = SteamAdapter.scan().map_err(|err| anyhow!("{err}"))?;
+    let game = games
+        .iter()
+        .find(|game| game.display_name.starts_with(&format!("{appid} —")))
+        .with_context(|| format!("未找到 appid {appid}，先运行 gamelift scan"))?;
+    let steamapps = game
+        .install_dir
+        .parent()
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .with_context(|| format!("无法定位 steamapps 目录: {}", game.install_dir.display()))?;
+    let root_name = game
+        .install_dir
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .with_context(|| format!("无法确定 installdir: {}", game.install_dir.display()))?;
+    let acf_name = transfer::acf_filename(appid);
+    let acf_path = steamapps.join(&acf_name);
+    let content = std::fs::read_to_string(&acf_path)
+        .with_context(|| format!("读取清单失败: {}", acf_path.display()))?;
+    let claim_files = vec![ClaimFile {
+        relative_path: acf_name,
+        content,
+    }];
+    Ok((
+        game.install_dir.clone(),
+        game.display_name.clone(),
+        "steam".to_owned(),
+        root_name,
+        claim_files,
+    ))
+}
+
+/// 目标父目录与认领根目录
+fn resolve_recv_dest(dest: Option<&str>, want: &str) -> Result<(PathBuf, Option<PathBuf>)> {
+    if let Some(dir) = dest {
+        let parent = PathBuf::from(dir);
+        std::fs::create_dir_all(&parent)
+            .with_context(|| format!("创建目标目录失败: {}", parent.display()))?;
+        let claim_root = parent
+            .file_name()
+            .filter(|name| name.eq_ignore_ascii_case("common"))
+            .and_then(|_| parent.parent())
+            .map(Path::to_path_buf);
+        return Ok((parent, claim_root));
+    }
+    let steamapps = steam::steam_root()
+        .map(|root| root.join("steamapps"))
+        .with_context(|| {
+            format!("本机未找到 Steam 库，无法推断 {want} 的目标位置，请用 --dest 指定目录")
+        })?;
+    Ok((steamapps.join("common"), Some(steamapps)))
+}
+
+/// 解析本机直连地址
+fn resolve_iface(explicit: Option<&str>) -> Result<IpAddr> {
+    if let Some(text) = explicit {
+        return text
+            .parse()
+            .with_context(|| format!("--iface 需要本机直连地址，收到: {text}"));
+    }
+    let nic = link::list_nics()
+        .into_iter()
+        .find(|nic| nic.is_physical)
+        .context("找不到物理以太网口，请用 --iface 指定本机地址")?;
+    let text = nic.current_ipv4.with_context(|| {
+        format!(
+            "{} 尚未配置地址，先运行 gamelift link，或用 --iface 指定",
+            nic.name
+        )
+    })?;
+    text.parse()
+        .with_context(|| format!("无法解析网口地址: {text}"))
+}
+
+/// 广播目标地址
+fn broadcast_target(ip: IpAddr) -> SocketAddr {
+    match ip {
+        IpAddr::V4(v4) => SocketAddr::new(
+            IpAddr::V4(discovery::directed_broadcast(v4)),
+            discovery::DISCOVERY_PORT,
+        ),
+        IpAddr::V6(_) => SocketAddr::new(ip, discovery::DISCOVERY_PORT),
+    }
+}
+
+/// 取 `--flag value` 形式参数的值
+fn flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+    let index = args.iter().position(|arg| arg == flag)?;
+    args.get(index + 1).map(String::as_str)
+}
+
+/// 是否出现开关形式的参数
+fn has_flag(args: &[String], flag: &str) -> bool {
+    args.iter().any(|arg| arg == flag)
+}
+
+/// 解析 `--flag 数字` 形式的参数
+fn parse_flag<T>(args: &[String], flag: &str) -> Result<Option<T>>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    match flag_value(args, flag) {
+        Some(text) => text
+            .parse::<T>()
+            .map(Some)
+            .map_err(|err| anyhow!("{flag} 取值非法: {err}")),
+        None => Ok(None),
+    }
+}
+
+/// 一行进度文本
+fn progress_line(stats: &TransferStats) -> String {
+    let eta = stats
+        .bytes_total
+        .saturating_sub(stats.bytes_done)
+        .checked_div(stats.bytes_per_sec)
+        .map_or_else(|| "计算中".to_owned(), format_duration);
+    format!(
+        "{:>6.1}%  {} / {}  速度 {}/s  剩余 {eta}    ",
+        stats.fraction() * 100.0,
+        human_size(stats.bytes_done),
+        human_size(stats.bytes_total),
+        human_size(stats.bytes_per_sec)
+    )
+}
+
+/// 人类可读的时长
+fn format_duration(seconds: u64) -> String {
+    if seconds >= 3600 {
+        format!("{} 小时 {} 分", seconds / 3600, (seconds % 3600) / 60)
+    } else if seconds >= 60 {
+        format!("{} 分 {} 秒", seconds / 60, seconds % 60)
+    } else {
+        format!("{seconds} 秒")
+    }
 }
 
 /// 人类可读的容量

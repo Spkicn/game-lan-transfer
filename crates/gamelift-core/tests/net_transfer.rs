@@ -64,6 +64,7 @@ fn host_options(root: &Path, port: u16, chunk_bytes: u32) -> HostOptions {
     HostOptions {
         root: root.to_path_buf(),
         extra_roots: Vec::new(),
+        wrap_root: false,
         bind: addr(port),
         pairing: None,
         title: "示例游戏".to_owned(),

@@ -36,6 +36,8 @@ pub struct HostOptions {
     pub platform: String,
     /// 目标根目录名，默认取根目录的目录名
     pub root_name: Option<String>,
+    /// 主根是否也以 `<root_name>/` 前缀进清单，用于一次搬运多个互不相干的条目
+    pub wrap_root: bool,
     /// 内容落盘后由目标端写入的认领文件
     pub claim_files: Vec<ClaimFile>,
     /// 分块大小
@@ -114,12 +116,12 @@ impl Host {
                 )));
             }
         }
+        if options.root_name.is_none() {
+            options.root_name = Some(default_root_name(&options.root));
+        }
         let files = collect_files(&options)?;
         if files.is_empty() {
             return Err(Error::Io("源目录里没有可传输的文件".to_owned()));
-        }
-        if options.root_name.is_none() {
-            options.root_name = Some(default_root_name(&options.root));
         }
         let options = Arc::new(options);
         let counters = Arc::new(Counters::default());
@@ -190,7 +192,12 @@ impl Drop for Host {
 /// 目录不可读时返回 [`Error::Io`]
 fn collect_files(options: &HostOptions) -> Result<Vec<ServedFile>> {
     let mut out = Vec::new();
-    walk_into(&options.root, "", &mut out)?;
+    let primary_prefix = if options.wrap_root {
+        options.root_name.clone().unwrap_or_default()
+    } else {
+        String::new()
+    };
+    walk_into(&options.root, primary_prefix.as_str(), &mut out)?;
     for extra in &options.extra_roots {
         walk_into(&extra.path, &extra.name, &mut out)?;
     }
@@ -405,6 +412,13 @@ fn resolve_path(options: &HostOptions, relative: &str) -> Result<PathBuf> {
     let mut components = sanitized.components();
     if let Some(Component::Normal(first)) = components.next() {
         if let Some(name) = first.to_str() {
+            if options.wrap_root && options.root_name.as_deref() == Some(name) {
+                let rest: PathBuf = components.collect();
+                if rest.as_os_str().is_empty() {
+                    return Ok(options.root.clone());
+                }
+                return join_within(&options.root, &rest);
+            }
             if let Some(extra) = options.extra_roots.iter().find(|root| root.name == name) {
                 let rest: PathBuf = components.collect();
                 if rest.as_os_str().is_empty() {
@@ -541,6 +555,7 @@ mod tests {
         HostOptions {
             root,
             extra_roots: Vec::new(),
+            wrap_root: false,
             bind,
             pairing: None,
             title: "示例".to_owned(),
@@ -587,6 +602,21 @@ mod tests {
         assert_eq!(primary, root.join("a.bin"));
         std::fs::remove_dir_all(&root).expect("cleanup");
         std::fs::remove_dir_all(&extra_dir).expect("cleanup");
+    }
+
+    #[test]
+    fn wrapped_primary_root_keeps_its_name() {
+        let root = temp_dir("wrapped");
+        std::fs::create_dir_all(root.join("bin")).expect("mkdir");
+        std::fs::write(root.join("bin/a.bin"), b"x").expect("write");
+        let mut host_options = options(root.clone(), SocketAddr::from(([127, 0, 0, 1], 0)));
+        host_options.root_name = Some("demo".to_owned());
+        host_options.wrap_root = true;
+        let files = collect_files(&host_options).expect("walk");
+        assert_eq!(files[0].relative, "demo/bin/a.bin");
+        let resolved = resolve_path(&host_options, "demo/bin/a.bin").expect("resolve");
+        assert_eq!(resolved, root.join("bin/a.bin"));
+        std::fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[test]

@@ -333,6 +333,7 @@ fn host_cmd(args: &[String]) -> Result<()> {
     let host = server::Host::start(HostOptions {
         root: root.clone(),
         extra_roots: Vec::new(),
+        wrap_root: false,
         bind: SocketAddr::new(bind_ip, port),
         pairing: Some(pairing.clone()),
         title: title.clone(),

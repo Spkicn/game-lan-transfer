@@ -114,6 +114,9 @@ pub enum Message {
         pairing: Option<String>,
         /// 拉取时使用的内容名
         want: String,
+        /// 内容所属平台，接收方按它决定认领文件写到哪
+        #[serde(default)]
+        platform: Option<String>,
     },
     /// 接收方对传输请求的答复
     TransferDecision {

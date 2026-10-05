@@ -6,6 +6,7 @@ import {
   initialState,
   pickedBytes,
   pickedItems,
+  pickedPlatform,
   reduce,
   rowState,
   transferComplete,
@@ -75,6 +76,7 @@ describe('三阶段状态机', () => {
         total_bytes: 2048,
         items: [{ name: 'demo', is_dir: true, bytes: 2048 }],
         want: 'demo',
+        platform: 'steam',
       },
     });
     state = reduce(state, { type: 'incoming-dest', value: 'D:/games' });
@@ -136,6 +138,20 @@ describe('三阶段状态机', () => {
       },
     });
     expect(rowState(state)).toBe('done');
+  });
+
+  it('全选同一个平台的游戏才带平台', () => {
+    let state = reduce(initialState, { type: 'games', games: [game] });
+    expect(pickedPlatform(state)).toBeNull();
+    state = reduce(state, { type: 'toggle-pick', path: game.install_dir });
+    expect(pickedPlatform(state)).toBe('steam');
+    // 混入一个文件夹就不再带平台
+    state = reduce(state, {
+      type: 'entries',
+      entries: [{ name: 'a.bin', path: 'D:/a.bin', is_dir: false, bytes: 1024 }],
+    });
+    state = reduce(state, { type: 'toggle-pick', path: 'D:/a.bin' });
+    expect(pickedPlatform(state)).toBeNull();
   });
 
   it('对端同意后传输仍在进行，被拒才算结束', () => {

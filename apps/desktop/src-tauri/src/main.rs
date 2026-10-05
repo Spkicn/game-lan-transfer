@@ -577,6 +577,8 @@ struct IncomingEvent {
     items: Vec<IncomingItem>,
     /// 拉取时使用的内容名
     want: String,
+    /// 内容所属平台
+    platform: Option<String>,
 }
 
 /// 事件名：收到一条传输请求
@@ -684,6 +686,7 @@ fn start_listen(
                         total_bytes: incoming.request.total_bytes,
                         items,
                         want: incoming.request.want.clone(),
+                        platform: incoming.request.platform.clone(),
                     },
                 );
             }
@@ -770,6 +773,7 @@ fn start_send(
     items: Vec<String>,
     pairing: Option<String>,
     iface: Option<String>,
+    platform: Option<String>,
 ) -> Result<SendInfo, String> {
     let Some(first) = items.first() else {
         return Err("请先选择要发送的内容".to_owned());
@@ -808,9 +812,12 @@ fn start_send(
         bind: SocketAddr::new(ip, net::DEFAULT_SESSION_PORT),
         pairing: Some(code.clone()),
         title: root_name.clone(),
-        platform: "files".to_owned(),
+        platform: platform.clone().unwrap_or_else(|| "files".to_owned()),
         root_name: Some(root_name.clone()),
-        claim_files: Vec::new(),
+        claim_files: platform
+            .as_deref()
+            .map(|name| claim_files_for(name, &root))
+            .unwrap_or_default(),
         chunk_bytes: net::DEFAULT_CHUNK_BYTES,
     })
     .map_err(describe)?;
@@ -842,6 +849,7 @@ fn start_send(
         transfer_port: port,
         pairing: Some(code.clone()),
         want: root_name,
+        platform,
     };
     let request_addr = parse_peer_with_default(&peer, session::REQUEST_PORT)?;
     let decision = session::request_transfer(request_addr, &request, session::ANSWER_TIMEOUT)

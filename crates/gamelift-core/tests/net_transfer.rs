@@ -608,6 +608,7 @@ fn request_then_approve_then_transfer() {
         transfer_port: host.local_addr().port(),
         pairing: Some("424242".to_owned()),
         want: "demo".to_owned(),
+        platform: Some("steam".to_owned()),
     };
     let peer = listener.local_addr();
     let sender = thread::spawn(move || {
@@ -615,6 +616,11 @@ fn request_then_approve_then_transfer() {
     });
 
     let incoming = listener.poll(Duration::from_secs(5)).expect("incoming");
+    assert_eq!(
+        incoming.request.platform.as_deref(),
+        Some("steam"),
+        "平台要跟着请求过网，接收方才能把认领文件写对地方"
+    );
     assert_eq!(incoming.request.sender_name, "laptop");
     assert_eq!(incoming.request.total_bytes, payload.len() as u64);
 

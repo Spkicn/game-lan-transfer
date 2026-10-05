@@ -25,6 +25,7 @@ import {
   initialState,
   pickedBytes,
   pickedItems,
+  pickedPlatform,
   reduce,
   rowState,
   transferComplete,
@@ -467,7 +468,7 @@ function PickStage({
                 dispatch({ type: 'stage', stage: 'transfer' });
                 dispatch({ type: 'running', running: true });
                 dispatch({ type: 'transfer-plan', role: 'send', items: pickedItems(state) });
-                const result = await api.startSend(peer.addr, state.picked, pairing, iface);
+                const result = await api.startSend(peer.addr, state.picked, pairing, iface, pickedPlatform(state));
                 if (result.approved) {
                   dispatch({ type: 'send-result', result });
                   dispatch({ type: 'notice', message: `对端已同意，落到 ${result.dest ?? '对端选的目录'}` });
@@ -661,6 +662,7 @@ function IncomingPanel({
         <span className="label">传入请求</span>
         <span className="text-[13px]">
           {incoming.sender_name} 想送来 {formatBytes(incoming.total_bytes)}，共 {incoming.items.length} 项
+          {incoming.platform ? ` · ${incoming.platform}` : ''}
         </span>
         <span className="reading ml-auto truncate text-[12px] text-ink-faint">{incoming.from}</span>
       </header>
@@ -699,7 +701,7 @@ function IncomingPanel({
               dispatch({ type: 'progress', progress: null });
               dispatch({ type: 'notice', message: '已同意，开始搬运' });
               const peer = incoming.from;
-              const summary = await api.startRecv(peer, incoming.want, dest, null, pairing, true, true);
+              const summary = await api.startRecv(peer, incoming.want, dest, incoming.platform, pairing, true, true);
               dispatch({ type: 'finished', summary });
               dispatch({ type: 'notice', message: null });
             })

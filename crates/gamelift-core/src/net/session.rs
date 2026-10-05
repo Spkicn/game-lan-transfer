@@ -44,6 +44,8 @@ pub struct TransferRequest {
     pub pairing: Option<String>,
     /// 拉取时使用的内容名
     pub want: String,
+    /// 内容所属平台，接收方按它决定认领文件写到哪
+    pub platform: Option<String>,
 }
 
 impl TransferRequest {
@@ -57,6 +59,7 @@ impl TransferRequest {
             transfer_port: self.transfer_port,
             pairing: self.pairing.clone(),
             want: self.want.clone(),
+            platform: self.platform.clone(),
         }
     }
 }
@@ -343,6 +346,7 @@ fn handle_request(
         transfer_port,
         pairing,
         want,
+        platform,
     } = protocol::decode(&frame.payload)?
     else {
         return reply(
@@ -374,6 +378,7 @@ fn handle_request(
             transfer_port,
             pairing,
             want,
+            platform,
         },
     });
     let decision = match rx.recv_timeout(DECISION_TIMEOUT) {
@@ -414,6 +419,7 @@ mod tests {
             transfer_port: 27101,
             pairing: Some("123456".to_owned()),
             want: "demo".to_owned(),
+            platform: Some("steam".to_owned()),
         }
     }
 

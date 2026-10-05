@@ -75,6 +75,8 @@ export interface IncomingEvent {
   total_bytes: number;
   items: IncomingItem[];
   want: string;
+  /** 内容所属平台，用来决定认领文件写到哪 */
+  platform: string | null;
 }
 
 /** 发起结果 */
@@ -296,8 +298,7 @@ export function awaitingIncoming(state: AppState): boolean {
 }
 
 /** 已选内容整理成队列条目 */
-export function pickedItems(state: AppState): TransferItem[] {
-  return state.picked.map((path) => {
+export function pickedItems(state: AppState): TransferItem[] {  return state.picked.map((path) => {
     const game = state.games.find((entry) => entry.install_dir === path);
     const local = state.entries.find((entry) => entry.path === path);
     return {
@@ -317,8 +318,19 @@ export function transferComplete(state: AppState): boolean {
   return progress !== null && progress.bytes_total > 0 && progress.bytes_done >= progress.bytes_total;
 }
 
-/** 队列里每一行此刻的状态 */
-export function rowState(state: AppState): 'waiting' | 'flowing' | 'done' {
+/** 全选的都是同一个平台的游戏时才带上平台，用来决定认领文件写到哪 */
+export function pickedPlatform(state: AppState): string | null {
+  const platforms = state.picked.map(
+    (path) => state.games.find((game) => game.install_dir === path)?.platform ?? null,
+  );
+  const [first] = platforms;
+  if (platforms.length === 0 || first === null || first === undefined) {
+    return null;
+  }
+  return platforms.every((value) => value === first) ? first : null;
+}
+
+/** 队列里每一行此刻的状态 */export function rowState(state: AppState): 'waiting' | 'flowing' | 'done' {
   if (transferComplete(state)) {
     return 'done';
   }

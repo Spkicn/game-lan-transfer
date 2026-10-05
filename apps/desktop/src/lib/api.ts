@@ -110,15 +110,17 @@ export function startSend(
   items: string[],
   pairing: string | null,
   iface: string | null,
+  platform: string | null,
 ): Promise<SendInfo> {
   if (MOCK) {
     void peer;
     void items;
     void pairing;
     void iface;
+    void platform;
     return mock({ port: 27101, approved: true, dest: 'D:\\Games', message: '' }, 500);
   }
-  return invoke<SendInfo>('start_send', { peer, items, pairing, iface });
+  return invoke<SendInfo>('start_send', { peer, items, pairing, iface, platform });
 }
 
 /** 接收内容 */
@@ -186,6 +188,7 @@ export const mockRequest: IncomingEvent = {
     { name: '存档备份', is_dir: true, bytes: 812 * 1024 ** 2 },
   ],
   want: '示例游戏 A',
+  platform: 'steam',
 };
 
 /** 订阅传输进度 */

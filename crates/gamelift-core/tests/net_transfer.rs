@@ -547,6 +547,62 @@ fn small_update_transfers_under_ten_percent() {
     let _ = std::fs::remove_dir_all(&dest);
 }
 
+/// 三个客户端同时拉取时，每个客户端的有效速率不应明显低于单独拉取
+#[test]
+#[allow(clippy::cast_precision_loss)]
+fn three_clients_keep_eighty_percent_throughput() {
+    let src = temp_dir("multi-src");
+    let payload = pseudo_random(64 * 1024 * 1024);
+    std::fs::write(src.join("big.bin"), &payload).expect("write");
+    let mut host = Host::start(host_options(&src, free_port(), 4 * 1024 * 1024)).expect("host");
+
+    // 基准：单个客户端拉完一份
+    let single_dest = temp_dir("multi-single");
+    let single_started = Instant::now();
+    let single = recv(
+        &recv_options(host.local_addr(), &single_dest, 4 * 1024 * 1024),
+        &mut |_| {},
+    )
+    .expect("single recv");
+    let single_elapsed = single_started.elapsed();
+    assert_eq!(read_file(&single.root.join("big.bin")), payload);
+
+    // 三份内容同时拉取
+    let mut handles = Vec::new();
+    let started = Instant::now();
+    for index in 0..3 {
+        let dest = temp_dir(&format!("multi-{index}"));
+        let options = recv_options(host.local_addr(), &dest, 4 * 1024 * 1024);
+        handles.push(thread::spawn(move || {
+            recv(&options, &mut |_| {}).expect("concurrent recv")
+        }));
+    }
+    for handle in handles {
+        let outcome = handle.join().expect("join");
+        assert_eq!(read_file(&outcome.root.join("big.bin")), payload);
+    }
+    let concurrent_elapsed = started.elapsed();
+
+    // 三客户端合计吞吐不应低于单机直传的 80%
+    let bytes = payload.len() as f64;
+    let single_rate = bytes / single_elapsed.as_secs_f64();
+    let aggregate_rate = bytes * 3.0 / concurrent_elapsed.as_secs_f64();
+    let ratio = aggregate_rate / single_rate;
+    println!(
+        "并发基准：单机 {:.0} MiB/s，三客户端合计 {:.0} MiB/s，合计是单机的 {:.2} 倍",
+        single_rate / (1024.0 * 1024.0),
+        aggregate_rate / (1024.0 * 1024.0),
+        ratio
+    );
+    assert!(
+        ratio >= 0.8,
+        "三客户端合计吞吐只有单机直传的 {ratio:.2} 倍，低于 0.8"
+    );
+    host.shutdown();
+    let _ = std::fs::remove_dir_all(&src);
+    let _ = std::fs::remove_dir_all(&single_dest);
+}
+
 /// 回环吞吐基准，手动运行：
 /// `cargo test -p gamelift-core --test net_transfer -- --ignored --nocapture`
 #[test]

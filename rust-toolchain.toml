@@ -1,2 +1,4 @@
 [toolchain]
-channel = "stable"
+# 与 CI 保持一致，升级时同步改 .github/workflows/ci.yml
+channel = "1.99.0"
+components = ["rustfmt", "clippy"]

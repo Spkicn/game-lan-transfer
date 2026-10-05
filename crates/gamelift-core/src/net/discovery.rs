@@ -243,13 +243,13 @@ mod tests {
         announce_to(&sender, listener.local_addr().expect("addr"), &peer).expect("announce");
         let found =
             collect(&listener, Duration::from_millis(200), Some(peer.instance)).expect("collect");
-        assert!(found.is_empty(), "found = {found:?}");
+        assert_eq!(found, Vec::<Peer>::new(), "found = {found:?}");
     }
 
     #[test]
     fn collect_returns_empty_when_nobody_announces() {
         let listener = bind(IpAddr::V4(Ipv4Addr::LOCALHOST), 0).expect("bind listener");
         let found = collect(&listener, Duration::from_millis(120), None).expect("collect");
-        assert!(found.is_empty());
+        assert_eq!(found, Vec::<Peer>::new());
     }
 }

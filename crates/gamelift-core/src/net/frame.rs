@@ -150,7 +150,7 @@ mod tests {
         let mut cursor = std::io::Cursor::new(buf);
         let decoded = read_frame(&mut cursor).expect("read").expect("frame");
         assert_eq!(decoded.kind, KIND_CHUNK);
-        assert!(decoded.payload.is_empty());
+        assert_eq!(decoded.payload, Vec::<u8>::new());
     }
 
     #[test]

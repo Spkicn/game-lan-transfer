@@ -27,6 +27,7 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail, Context, Result};
 use gamelift_core::net::client::{self, RecvOptions};
 use gamelift_core::net::discovery::{self, Peer};
+use gamelift_core::net::paths::{join_within, sanitize_relative};
 use gamelift_core::net::protocol::ClaimFile;
 use gamelift_core::net::server::{self, HostOptions};
 use gamelift_core::net::{self, DEFAULT_STREAMS};
@@ -386,9 +387,13 @@ fn recv_cmd(args: &[String]) -> Result<()> {
     let port = parse_flag(args, "--port")?.unwrap_or(net::DEFAULT_SESSION_PORT);
     let streams = parse_flag(args, "--streams")?.unwrap_or(DEFAULT_STREAMS);
     let (dest_parent, claim_root) = resolve_recv_dest(flag_value(args, "--dest"), &want)?;
+    let pairing = flag_value(args, "--code").map(str::to_owned);
+    let peer = SocketAddr::new(peer_ip, port);
+    let info = client::probe(peer, pairing.as_deref(), &want).context("探测源端失败")?;
+    let old_root = diff_source(&dest_parent, &info.root_name)?;
     let options = RecvOptions {
-        peer: SocketAddr::new(peer_ip, port),
-        pairing: flag_value(args, "--code").map(str::to_owned),
+        peer,
+        pairing,
         want: want.clone(),
         dest_parent: dest_parent.clone(),
         claim_root,
@@ -396,11 +401,20 @@ fn recv_cmd(args: &[String]) -> Result<()> {
         chunk_bytes: net::DEFAULT_CHUNK_BYTES,
         cancel: None,
         force: has_flag(args, "--force"),
+        old_root: old_root.clone(),
     };
     println!(
-        "从 {peer_ip}:{port} 接收 {want}，目标 {}，并发 {streams}",
+        "从 {peer_ip}:{port} 接收 {want}（{}，{} 个文件），目标 {}",
+        human_size(info.total_bytes),
+        info.file_count,
         dest_parent.display()
     );
+    if let Some(root) = &old_root {
+        println!(
+            "检测到已有副本 {}，将只传变化的块（覆盖它需要 --force）",
+            root.display()
+        );
+    }
     let announce_stop = match receiver_announcer(&dest_parent, flag_value(args, "--iface")) {
         Ok(stop) => Some(stop),
         Err(err) => {
@@ -494,6 +508,16 @@ fn resolve_recv_dest(dest: Option<&str>, want: &str) -> Result<(PathBuf, Option<
             format!("本机未找到 Steam 库，无法推断 {want} 的目标位置，请用 --dest 指定目录")
         })?;
     Ok((steamapps.join("common"), Some(steamapps)))
+}
+
+/// 目标机上已有的同内容副本路径，存在时用于差异传输
+fn diff_source(dest_parent: &Path, root_name: &str) -> Result<Option<PathBuf>> {
+    let relative = sanitize_relative(root_name)?;
+    if relative.components().count() != 1 {
+        return Ok(None);
+    }
+    let candidate = join_within(dest_parent, &relative)?;
+    Ok(candidate.is_dir().then_some(candidate))
 }
 
 /// 解析本机直连地址

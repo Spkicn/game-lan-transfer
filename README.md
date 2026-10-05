@@ -10,7 +10,7 @@ GameLift 是一个 Windows 局域网游戏迁移工具。它把一台机器上�
 |---|---|
 | 直连自举 | 识别物理以太网口并配置点对点静态地址，不设置网关，不改变机器上其他网络的默认路由；可一键还原 |
 | 对端发现 | 两端都会在直连网段内广播自身信息，`peers` 列出对端、平台与可用空间；也可直接指定对端地址 |
-| 游戏库扫描 | 解析 Steam 的 `libraryfolders.vdf` 与 `appmanifest_*.acf`，以及 Epic 的 `.item` 清单 |
+| 游戏库扫描 | 解析 Steam 的 `libraryfolders.vdf` 与 `appmanifest_*.acf`、Epic 的 `.item` 清单，以及战网 / EA / Ubisoft / GOG 在注册表里的安装记录 |
 | 分块传输 | 多连接并发拉取分块，每块附 `blake3` 摘要并逐块校验；临时共享的 SMB 路径作为兜底保留 |
 | 断点续传 | 分块完成位图落盘，进程重启或断线后只补缺失分块，已完成部分不重传 |
 | 差异传输 | 目标机已有旧版本时，用内容定义分块比对，只传变化的块 |
@@ -25,7 +25,7 @@ GameLift 是一个 Windows 局域网游戏迁移工具。它把一台机器上�
 
 ```
 crates/gamelift-core/       传输引擎：网口自举、对端发现、分块传输与校验、断点续传、差异比对
-crates/gamelift-launchers/  平台适配器：Steam 库扫描、Epic 清单解析、VDF 解析、通用文件夹适配器
+crates/gamelift-launchers/  平台适配器：Steam / Epic / 战网 / EA / Ubisoft / GOG 的库扫描与清单写入
 crates/gamelift-cli/        命令行客户端，依赖 core 与 launchers
 apps/desktop/               Tauri 桌面应用：src-tauri 只写命令胶水层，src 是三屏界面
 ```
@@ -83,7 +83,15 @@ gamelift pull <appid> --peer <IP>         目标端：SMB 兜底
 
 ## 状态
 
-已实现命令行客户端与传输引擎：Steam 与 Epic 库扫描、直连自举、对端发现、多连接分块传输与逐块校验、断点续传、内容差异传输、空间预检与清单认领，SMB 与 robocopy 作为兜底路径保留；桌面应用用三阶段界面覆盖同一套能力，并支持发送方发起、接收方选目录并同意的传输请求。后续计划：战网 / EA / Ubisoft / GOG 适配器、传输加密与限速。
+已实现命令行客户端与传输引擎：Steam 与 Epic 库扫描、直连自举、对端发现、多连接分块传输与逐块校验、断点续传、内容差异传输、空间预检与清单认领，SMB 与 robocopy 作为兜底路径保留；桌面应用用三阶段界面覆盖同一套能力，并支持发送方发起、接收方选目录并同意的传输请求。
+
+平台适配器覆盖 Steam、Epic、战网、EA、Ubisoft 与 GOG。其中：
+
+- Steam 与 Epic 会把内容写回各自的清单文件，搬完即可在启动器里看到
+- 战网、EA、Ubisoft 与 GOG 的库状态记在启动器自己的数据库或注册表里，GameLift 只搬内容不写这些库状态，落地后需要在对应启动器里执行一次「定位已安装文件」或「验证完整性」
+- 这四个适配器按各启动器公开的注册表布局实现，尚未在有对应启动器的机器上实测过
+
+后续计划：传输加密与限速。
 
 ## 参与贡献
 

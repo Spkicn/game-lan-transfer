@@ -141,6 +141,8 @@ struct Listening {
     listener: Arc<RequestListener>,
     /// 轮询停止标志
     stop: Arc<AtomicBool>,
+    /// 广播停止标志，等待接收期间也要让对端能发现自己
+    announce: Arc<AtomicBool>,
 }
 
 /// 应用共享状态
@@ -687,7 +689,23 @@ fn start_listen(
             }
         })
         .map_err(io_text)?;
-    *lock(&state.listening) = Some(Listening { listener, stop });
+    // 等待接收期间也广播，否则两边都停在连接页时谁也发现不了谁
+    let announce = Arc::new(AtomicBool::new(false));
+    let peer = Peer {
+        instance: discovery::new_instance(),
+        name: discovery::local_name(),
+        addr: ip,
+        session_port: 0,
+        platform: discovery::local_platform(),
+        free_bytes: 0,
+        pairing_required: code.is_some(),
+    };
+    spawn_announcer(ip, peer, Arc::clone(&announce))?;
+    *lock(&state.listening) = Some(Listening {
+        listener,
+        stop,
+        announce,
+    });
     Ok(ListenInfo {
         addr: ip.to_string(),
         port: addr.port(),
@@ -705,6 +723,7 @@ fn stop_listen(state: State<'_, AppState>) {
 fn stop_listen_inner(state: &AppState) {
     if let Some(listening) = lock(&state.listening).take() {
         listening.stop.store(true, Ordering::Relaxed);
+        listening.announce.store(true, Ordering::Relaxed);
     }
 }
 

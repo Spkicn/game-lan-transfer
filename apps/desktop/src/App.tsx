@@ -25,7 +25,9 @@ import {
   connected,
   initialState,
   pickedBytes,
+  pickedItems,
   reduce,
+  rowState,
   type AppState,
   type IncomingEvent,
   type LocalEntry,
@@ -182,7 +184,7 @@ function ConnectStage({
     });
 
   return (
-    <div className="grid h-full min-h-[440px] gap-6 lg:grid-cols-[1.15fr_0.85fr_1.15fr]">
+    <div className="grid h-full min-h-[440px] gap-6 md:grid-cols-[1.15fr_0.85fr_1.15fr]">
       <Port
         label="本机"
         name={network?.nic_name ?? '未检测到网卡'}
@@ -320,7 +322,7 @@ function PickStage({
     : null;
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[1fr_1fr]">
+    <div className="grid gap-6 md:grid-cols-[1fr_1fr]">
       <section className="border border-panel-edge bg-panel-face">
         <header className="flex items-center justify-between gap-3 border-b border-panel-edge px-3 py-2">
           <div className="flex gap-1">
@@ -425,6 +427,7 @@ function PickStage({
                 }
                 dispatch({ type: 'stage', stage: 'transfer' });
                 dispatch({ type: 'running', running: true });
+                dispatch({ type: 'transfer-plan', role: 'send', items: pickedItems(state) });
                 const result = await api.startSend(peer.addr, state.picked, pairing, iface);
                 dispatch({ type: 'send-result', result });
                 if (!result.approved) {
@@ -494,9 +497,37 @@ function TransferStage({
                 ? '传输中'
                 : state.finished
                   ? '已完成'
-                  : '等待对端同意'}
+                  : state.role === 'receive'
+                    ? '等待你同意'
+                    : state.sendResult?.approved
+                      ? '对端已同意'
+                      : '等待对端同意'}
           </span>
         </header>
+        {state.transferItems.length > 0 ? (
+          <ul className="border-b border-panel-edge">
+            {state.transferItems.map((item) => (
+              <RailRow
+                key={item.name}
+                selected={false}
+                title={item.name}
+                meta={state.role === 'receive' ? '来自对端' : `发往 ${state.sendResult?.dest ?? '对端'}`}
+                reading={formatBytes(item.bytes)}
+                state={
+                  <span
+                    className={[
+                      'label shrink-0',
+                      rowState(state) === 'flowing' ? 'text-lamp-flow' : '',
+                      rowState(state) === 'done' ? 'text-lamp-ready' : '',
+                    ].join(' ')}
+                  >
+                    {rowState(state) === 'done' ? '已完成' : rowState(state) === 'flowing' ? '传输中' : '等待'}
+                  </span>
+                }
+              />
+            ))}
+          </ul>
+        ) : null}
         <div className="px-4 py-3">
           {state.sendResult?.approved ? (
             <p className="text-[13px] text-ink-dim">
@@ -583,6 +614,7 @@ function IncomingPanel({
               }
               await api.respondRequest(incoming.id, true, dest);
               dispatch({ type: 'incoming', incoming: null });
+              dispatch({ type: 'transfer-plan', role: 'receive', items: incoming.items });
               dispatch({ type: 'running', running: true });
               dispatch({ type: 'progress', progress: null });
               const peer = incoming.from;
@@ -691,7 +723,9 @@ function NextAction({
           ? '正在搬运，中断了也没关系，重新发起只补没传完的部分'
           : state.finished
             ? '这一单完成了'
-            : '等待对端处理请求'}
+            : state.role === 'receive'
+              ? `对端想送来 ${state.transferItems.length} 项，选好目标文件夹后同意`
+              : '等待对端处理请求'}
       </span>
       <Button
         size="sm"

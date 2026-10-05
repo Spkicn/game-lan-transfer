@@ -5,7 +5,9 @@ import {
   connected,
   initialState,
   pickedBytes,
+  pickedItems,
   reduce,
+  rowState,
   type GameEntry,
   type PeerEntry,
 } from '../src/lib/state';
@@ -95,5 +97,43 @@ describe('三阶段状态机', () => {
     state = reduce(state, { type: 'reset' });
     expect(state.stage).toBe('connect');
     expect(state.pairing).toBe('123456');
+  });
+
+  it('队列条目从已选内容整理出来，名字取末段', () => {
+    let state = reduce(initialState, { type: 'games', games: [game] });
+    state = reduce(state, {
+      type: 'entries',
+      entries: [{ name: 'a.bin', path: 'D:/a.bin', is_dir: false, bytes: 1024 }],
+    });
+    state = reduce(state, { type: 'toggle-pick', path: game.install_dir });
+    state = reduce(state, { type: 'toggle-pick', path: 'D:/a.bin' });
+    expect(pickedItems(state)).toEqual([
+      { name: 'demo', bytes: 4096 },
+      { name: 'a.bin', bytes: 1024 },
+    ]);
+  });
+
+  it('记录本机在这一单里的角色与队列', () => {
+    let state = reduce(initialState, {
+      type: 'transfer-plan',
+      role: 'receive',
+      items: [{ name: 'demo', bytes: 2048 }],
+    });
+    expect(state.role).toBe('receive');
+    expect(state.transferItems).toEqual([{ name: 'demo', bytes: 2048 }]);
+    expect(rowState(state)).toBe('waiting');
+    state = reduce(state, { type: 'running', running: true });
+    expect(rowState(state)).toBe('flowing');
+    state = reduce(state, {
+      type: 'finished',
+      summary: {
+        root: 'D:/games',
+        bytes_received: 2048,
+        bytes_total: 2048,
+        bytes_resumed: 0,
+        claim_files: [],
+      },
+    });
+    expect(rowState(state)).toBe('done');
   });
 });

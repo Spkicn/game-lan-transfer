@@ -102,6 +102,15 @@ export interface RecvSummary {
   claim_files: string[];
 }
 
+/** 这一单里本机是发送方还是接收方 */
+export type TransferRole = 'send' | 'receive';
+
+/** 队列里的一件内容 */
+export interface TransferItem {
+  name: string;
+  bytes: number;
+}
+
 /** 界面状态 */
 export interface AppState {
   stage: Stage;
@@ -125,6 +134,8 @@ export interface AppState {
   sentBytes: number;
   sendResult: SendInfo | null;
   finished: RecvSummary | null;
+  role: TransferRole | null;
+  transferItems: TransferItem[];
 }
 
 /** 初始状态 */
@@ -150,6 +161,8 @@ export const initialState: AppState = {
   sentBytes: 0,
   sendResult: null,
   finished: null,
+  role: null,
+  transferItems: [],
 };
 
 /** 状态变更 */
@@ -176,6 +189,7 @@ export type Action =
   | { type: 'sent'; bytes: number }
   | { type: 'send-result'; result: SendInfo | null }
   | { type: 'finished'; summary: RecvSummary | null }
+  | { type: 'transfer-plan'; role: TransferRole; items: TransferItem[] }
   | { type: 'reset' };
 
 /** 纯函数状态机 */
@@ -229,8 +243,15 @@ export function reduce(state: AppState, action: Action): AppState {
       return { ...state, sendResult: action.result, running: false };
     case 'finished':
       return { ...state, finished: action.summary, running: false };
+    case 'transfer-plan':
+      return { ...state, role: action.role, transferItems: action.items };
     case 'reset':
-      return { ...initialState, network: state.network, pairing: state.pairing, incomingDest: state.incomingDest };
+      return {
+        ...initialState,
+        network: state.network,
+        pairing: state.pairing,
+        incomingDest: state.incomingDest,
+      };
   }
 }
 
@@ -265,4 +286,24 @@ export function canAdvance(state: AppState): boolean {
 /** 正在等待对端回应的一笔请求 */
 export function awaitingIncoming(state: AppState): boolean {
   return state.incoming !== null;
+}
+
+/** 已选内容整理成队列条目 */
+export function pickedItems(state: AppState): TransferItem[] {
+  return state.picked.map((path) => {
+    const game = state.games.find((entry) => entry.install_dir === path);
+    const local = state.entries.find((entry) => entry.path === path);
+    return {
+      name: path.split(/[\\/]/).pop() ?? path,
+      bytes: game?.size_bytes ?? local?.bytes ?? 0,
+    };
+  });
+}
+
+/** 队列里每一行此刻的状态 */
+export function rowState(state: AppState): 'waiting' | 'flowing' | 'done' {
+  if (state.finished) {
+    return 'done';
+  }
+  return state.running ? 'flowing' : 'waiting';
 }

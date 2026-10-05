@@ -6,7 +6,7 @@
 
 GameLift：Windows 局域网游戏迁移工具。两台机器经网线或局域网互联，把源端已安装的游戏迁移到目标端，并写入平台清单文件，使目标机的启动器直接识别为已安装。
 
-**技术栈**：Rust（核心逻辑，workspace 多 crate）；桌面壳规划采用 Tauri v2 + TypeScript。
+**技术栈**：Rust（核心逻辑，workspace 多 crate）+ Tauri v2 + TypeScript（桌面壳）。
 
 **目录地图**：
 
@@ -14,6 +14,7 @@ GameLift：Windows 局域网游戏迁移工具。两台机器经网线或局域�
 crates/gamelift-core/      传输引擎：网口自举 / 传输 / 校验 / 进度，零 GUI 依赖
 crates/gamelift-launchers/ 平台适配器：Steam / Epic / 战网 / EA / Ubisoft / GOG 的库扫描与清单写入
 crates/gamelift-cli/       命令行客户端，依赖 core + launchers
+apps/desktop/              Tauri 桌面应用：src-tauri/ 只写 #[tauri::command] 胶水层
 ```
 
 **心智模型**：文件系统、网络、进程操作全部在 Rust 侧完成；前端只做 UI 与状态，经 Tauri command / event 通信，禁止在前端做任何 IO。
@@ -28,6 +29,11 @@ cargo fmt --all --check                                  # 格式检查
 cargo clippy --workspace --all-targets -- -D warnings    # lint，warning 即失败
 cargo test --workspace                                   # 全部测试
 cargo run -p gamelift-cli -- scan                        # 试运行 CLI
+
+# 桌面应用，在 apps/desktop 下执行
+pnpm typecheck                                           # tsc --noEmit
+pnpm test                                                # 前端单元测试
+pnpm build                                               # 前端产物
 ```
 
 **Windows 注意**：开发环境是 Git Bash + PowerShell；路径含空格要加引号。测试输出写到 `target/tmp/`，不要用系统盘临时目录。
@@ -44,7 +50,7 @@ cargo run -p gamelift-cli -- scan                        # 试运行 CLI
 
 ## 4. 代码规范 — TypeScript
 
-桌面壳落地后适用：
+桌面应用（`apps/desktop`）适用：
 
 - `strict: true`；禁止 `any`（确实需要时用 `unknown` + 收窄并注释理由）。
 - 前端不 import Node API，只通过 `@tauri-apps/api` 与后端通信。

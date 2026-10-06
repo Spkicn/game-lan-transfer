@@ -27,6 +27,7 @@ import {
   pickedBytes,
   pickedItems,
   pickedPlatform,
+  pullAddress,
   reduce,
   rowState,
   transferComplete,
@@ -704,7 +705,9 @@ function TransferStage({
               : done
                 ? '已完成'
                 : state.running
-                  ? '传输中'
+                  ? state.role === 'send' && (state.progress?.bytes_done ?? 0) === 0
+                    ? '等对端开始拉取'
+                    : '传输中'
                   : state.role === 'receive'
                     ? '等待你同意'
                     : state.sendResult?.approved
@@ -856,7 +859,9 @@ function IncomingPanel({
           {incoming.sender_name} 想送来 {formatBytes(incoming.total_bytes)}，共 {incoming.items.length} 项
           {incoming.platform ? ` · ${incoming.platform}` : ''}
         </span>
-        <span className="reading ml-auto truncate text-[12px] text-ink-faint">{incoming.from}</span>
+        <span className="reading ml-auto truncate text-[12px] text-ink-faint">
+          {pullAddress(incoming)}
+        </span>
       </header>
       <ul className="max-h-[26vh] overflow-y-auto">
         {incoming.items.map((item, index) => (
@@ -991,7 +996,7 @@ function IncomingPanel({
                 dispatch({ type: 'running', running: true });
                 dispatch({ type: 'progress', progress: null });
                 dispatch({ type: 'notice', message: '已同意，开始搬运' });
-                const peer = incoming.from;
+                const peer = pullAddress(incoming);
                 const summary = await api.startRecv(
                   peer,
                   incoming.want,
@@ -1106,7 +1111,9 @@ function NextAction({
         {done
           ? '这一单完成了'
           : state.running
-            ? '正在搬运，中断了也没关系，重新发起只补没传完的部分'
+            ? state.role === 'send' && (state.progress?.bytes_done ?? 0) === 0
+              ? '对端已同意，等它开始拉取；如果一直不动，看对端窗口是否报错'
+              : '正在搬运，中断了也没关系，重新发起只补没传完的部分'
             : state.role === 'receive'
               ? `对端想送来 ${state.transferItems.length} 项，选好目标文件夹后同意`
               : '等待对端处理请求'}

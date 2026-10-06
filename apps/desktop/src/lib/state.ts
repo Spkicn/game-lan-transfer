@@ -86,7 +86,10 @@ export interface IncomingItem {
 /** 传入请求 */
 export interface IncomingEvent {
   id: number;
+  /** 发送方地址，不含端口 */
   from: string;
+  /** 发送方传输服务端口 */
+  transfer_port: number;
   sender_name: string;
   total_bytes: number;
   items: IncomingItem[];
@@ -393,6 +396,14 @@ export function transferComplete(state: AppState): boolean {
   }
   const progress = state.progress;
   return progress !== null && progress.bytes_total > 0 && progress.bytes_done >= progress.bytes_total;
+}
+
+/** 接收方拉取时该连的地址：发送方地址加传输端口
+ *
+ * 请求连接来自对端的临时端口，不能拿它去拉取
+ */
+export function pullAddress(incoming: IncomingEvent): string {
+  return `${incoming.from}:${incoming.transfer_port}`;
 }
 
 /** 全选的都是同一个平台的游戏时才带上平台，用来决定认领文件写到哪 */

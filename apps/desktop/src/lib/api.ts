@@ -237,7 +237,8 @@ export function defaultDest(): Promise<string | null> {
 /** 假请求，供预览时手动触发 */
 export const mockRequest: IncomingEvent = {
   id: 1,
-  from: '192.168.88.2:27101',
+  from: '192.168.88.2',
+  transfer_port: 27101,
   sender_name: 'BAIUPC',
   total_bytes: 64 * 1024 ** 3,
   items: [

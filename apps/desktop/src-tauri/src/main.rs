@@ -660,8 +660,10 @@ struct IncomingItem {
 struct IncomingEvent {
     /// 请求编号
     id: u64,
-    /// 发送方地址
+    /// 发送方地址，不含端口
     from: String,
+    /// 发送方传输服务端口，接收方按它拉取
+    transfer_port: u16,
     /// 发送方主机名
     sender_name: String,
     /// 内容总字节数
@@ -836,7 +838,8 @@ fn spawn_request_poller(
                     EVENT_REQUEST,
                     IncomingEvent {
                         id: incoming.id,
-                        from: incoming.from.to_string(),
+                        from: incoming.from.ip().to_string(),
+                        transfer_port: incoming.request.transfer_port,
                         sender_name: incoming.request.sender_name.clone(),
                         total_bytes: incoming.request.total_bytes,
                         items,

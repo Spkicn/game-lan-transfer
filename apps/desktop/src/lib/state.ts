@@ -152,6 +152,34 @@ export interface DestPick {
   claimRoot: string | null;
 }
 
+/** 目录排序：目录在前，同类按名称，数字按数值比较
+ *
+ * 主流文件浏览界面都这么排，用户找目录时不必在一堆文件里翻
+ */
+export function sortEntries(entries: LocalEntry[]): LocalEntry[] {
+  return [...entries].sort((left, right) => {
+    if (left.is_dir !== right.is_dir) {
+      return left.is_dir ? -1 : 1;
+    }
+    return left.name.localeCompare(right.name, 'zh-Hans-CN', { numeric: true });
+  });
+}
+
+/** 路径拆成可点击的一段段，盘符与父目录都能直接跳 */
+export function pathSegments(path: string | null): Array<{ label: string; path: string }> {
+  if (!path) {
+    return [];
+  }
+  const parts = path.split(/[\\/]+/).filter((part) => part.length > 0);
+  const segments: Array<{ label: string; path: string }> = [];
+  let walked = '';
+  for (const part of parts) {
+    walked = walked.length === 0 ? `${part}\\` : `${walked}${walked.endsWith('\\') ? '' : '\\'}${part}`;
+    segments.push({ label: part, path: walked });
+  }
+  return segments;
+}
+
 /** 传输列表里一条已经完成的记录 */
 export interface TransferRecord {
   /** 唯一键，重复添加时按它去重 */

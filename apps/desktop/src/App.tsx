@@ -25,6 +25,7 @@ import {
   connected,
   diagnosticsText,
   initialState,
+  pathSegments,
   pickedBytes,
   pickedItems,
   pickedPlatform,
@@ -32,6 +33,7 @@ import {
   pullPlan,
   reduce,
   rowState,
+  sortEntries,
   transferComplete,
   type AppState,
   type IncomingEvent,
@@ -591,6 +593,26 @@ function PickStage({
             />
           </div>
         ) : null}
+        {state.source === 'files' ? (
+          <nav
+            aria-label="路径"
+            className="flex min-w-0 flex-wrap items-center gap-1 border-b border-panel-edge px-4 py-1.5"
+          >
+            <Button size="sm" variant="quiet" onClick={() => void browse(null)}>
+              <HardDrive className="size-3.5" /> 盘符
+            </Button>
+            {pathSegments(state.cwd).map((segment) => (
+              <Button
+                key={segment.path}
+                size="sm"
+                variant="quiet"
+                onClick={() => void browse(segment.path)}
+              >
+                {segment.label}
+              </Button>
+            ))}
+          </nav>
+        ) : null}
         <ul className="max-h-[46vh] overflow-y-auto">
           {state.source === 'games'
             ? state.games.map((game) => (
@@ -604,7 +626,7 @@ function PickStage({
                   reading={formatBytes(game.size_bytes)}
                 />
               ))
-            : state.entries.map((entry) => (
+            : sortEntries(state.entries).map((entry) => (
                 <RailRow
                   key={entry.path}
                   selected={state.picked.includes(entry.path)}
@@ -613,7 +635,13 @@ function PickStage({
                   selectLabel={`选中 ${entry.name}`}
                   title={entry.is_dir ? `${entry.name}\\` : entry.name}
                   meta={entry.path}
-                  reading={entry.is_dir ? '文件夹' : formatBytes(entry.bytes)}
+                  reading={
+                    entry.is_dir
+                      ? state.cwd === null && entry.bytes > 0
+                        ? `可用 ${formatBytes(entry.bytes)}`
+                        : '文件夹'
+                      : formatBytes(entry.bytes)
+                  }
                   state={entry.is_dir ? <FolderUp className="size-3.5 text-ink-faint" /> : null}
                 />
               ))}

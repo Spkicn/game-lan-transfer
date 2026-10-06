@@ -725,9 +725,10 @@ fn list_drives() -> Vec<LocalEntry> {
             let root = format!("{letter}:\\");
             PathBuf::from(&root).is_dir().then(|| LocalEntry {
                 name: root.clone(),
+                // 盘符行直接给出可用空间，选盘时不用再点进去看
+                bytes: link::free_bytes_at(Path::new(&root)).unwrap_or(0),
                 path: root,
                 is_dir: true,
-                bytes: 0,
             })
         })
         .collect()

@@ -5,12 +5,14 @@ import {
   connected,
   diagnosticsText,
   initialState,
+  pathSegments,
   pickedBytes,
   pickedItems,
   pickedPlatform,
   pullPlan,
   reduce,
   rowState,
+  sortEntries,
   transferComplete,
   type GameEntry,
   type PeerEntry,
@@ -158,6 +160,26 @@ describe('三阶段状态机', () => {
     });
     state = reduce(state, { type: 'toggle-pick', path: 'D:/a.bin' });
     expect(pickedPlatform(state)).toBeNull();
+  });
+
+  it('目录排在文件前面，同类按名称数字序', () => {
+    const sorted = sortEntries([
+      { name: 'b.txt', path: 'D:\\b.txt', is_dir: false, bytes: 1 },
+      { name: 'a10', path: 'D:\\a10', is_dir: true, bytes: 0 },
+      { name: 'a2', path: 'D:\\a2', is_dir: true, bytes: 0 },
+      { name: 'a.txt', path: 'D:\\a.txt', is_dir: false, bytes: 1 },
+    ]);
+    expect(sorted.map((entry) => entry.name)).toEqual(['a2', 'a10', 'a.txt', 'b.txt']);
+  });
+
+  it('路径拆成可点击的一段段', () => {
+    expect(pathSegments(null)).toEqual([]);
+    expect(pathSegments('D:\\')).toEqual([{ label: 'D:', path: 'D:\\' }]);
+    expect(pathSegments('D:\\Steam\\steamapps')).toEqual([
+      { label: 'D:', path: 'D:\\' },
+      { label: 'Steam', path: 'D:\\Steam' },
+      { label: 'steamapps', path: 'D:\\Steam\\steamapps' },
+    ]);
   });
 
   it('已完成的传输会留在列表里，重复添加只留一条', () => {

@@ -76,6 +76,20 @@ export function linkSpeedText(free: number): string {
   return free > 0 ? `对端可用 ${formatBytes(free)}` : '对端空间未知';
 }
 
+/** 两个 IPv4 是否在同一个 /24 网段，不同网段时广播能发现但数据传不过去 */
+export function sameSubnet(left: string | null, right: string | null): boolean {
+  if (!left || !right) {
+    return true;
+  }
+  const parts = (value: string): string[] => value.split(':')[0]?.split('.') ?? [];
+  const a = parts(left);
+  const b = parts(right);
+  if (a.length !== 4 || b.length !== 4) {
+    return true;
+  }
+  return a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
+}
+
 /** 端口标签：把 IPv4 与端口拼成面板读数 */
 export function endpointText(addr: string, port: number): string {
   return port > 0 ? `${addr}:${port}` : addr;

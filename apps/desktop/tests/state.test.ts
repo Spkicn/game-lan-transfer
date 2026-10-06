@@ -86,11 +86,13 @@ describe('三阶段状态机', () => {
     expect(state.incoming).toBeNull();
   });
 
-  it('错误会结束忙碌状态并保留阶段', () => {
+  it('错误会结束忙碌与进行中状态并保留阶段', () => {
     let state = reduce(initialState, { type: 'busy', busy: true });
-    state = reduce(state, { type: 'error', message: '连接失败' });
+    state = reduce(state, { type: 'running', running: true });
+    state = reduce(state, { type: 'error', message: '连接超时' });
     expect(state.busy).toBe(false);
-    expect(state.error).toBe('连接失败');
+    expect(state.running).toBe(false);
+    expect(state.error).toBe('连接超时');
     expect(state.stage).toBe('connect');
   });
 

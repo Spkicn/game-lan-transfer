@@ -18,7 +18,7 @@ import { Lamp, LinkRail, Port, RailRow, StatusStrip, type LampState } from './co
 import { Button } from './components/ui/button';
 import { Input } from './components/ui/input';
 import * as api from './lib/api';
-import { formatBytes, formatEta, formatRate, percent, spaceAdvice } from './lib/format';
+import { formatBytes, formatEta, formatRate, percent, sameSubnet, spaceAdvice } from './lib/format';
 import {
   canAdvance,
   connected,
@@ -135,7 +135,7 @@ export default function App() {
         </span>
       </header>
 
-      <main className="min-h-0 min-w-0 overflow-y-auto px-5 py-5">
+      <main className="min-h-0 min-w-0 overflow-x-hidden overflow-y-auto px-5 py-5">
         {state.stage === 'connect' ? <ConnectStage state={state} dispatch={dispatch} run={run} iface={iface} /> : null}
         {state.stage === 'pick' ? (
           <PickStage state={state} dispatch={dispatch} run={run} iface={iface} pairing={pairing} />
@@ -284,6 +284,11 @@ function ConnectStage({
             </Button>
           </div>
         )}
+        {peer && !sameSubnet(network?.address ?? null, peer.addr) ? (
+          <p className="min-w-0 break-all text-[12px] text-lamp-standby">
+            本机 {network?.address} 与对端 {peer.addr} 不在同一个网段：广播能互相看见，但数据传不过去。一端点「本机用 .1」、另一端点「本机用 .2」，或把两台机器接到同一个路由器上
+          </p>
+        ) : null}
         {state.peers.length > 0 ? (
           <ul className="border border-panel-edge">
             {state.peers.map((entry) => (
@@ -339,8 +344,8 @@ function PickStage({
     : null;
 
   return (
-    <div className="grid gap-6 md:grid-cols-[1fr_1fr]">
-      <section className="border border-panel-edge bg-panel-face">
+    <div className="grid min-w-0 gap-6 md:grid-cols-[1fr_1fr]">
+      <section className="min-w-0 border border-panel-edge bg-panel-face">
         <header className="flex items-center justify-between gap-3 border-b border-panel-edge px-4 py-2">
           <div className="flex gap-1" role="group" aria-label="内容来源">
             <Button
@@ -429,7 +434,7 @@ function PickStage({
         </ul>
       </section>
 
-      <section className="flex flex-col gap-6">
+      <section className="flex min-w-0 flex-col gap-6">
         <div className="border border-panel-edge bg-panel-face px-4 py-3">
           <p className="label">待发清单</p>
           <p className="reading mt-2 text-[22px]">{formatBytes(pickedBytes(state))}</p>
@@ -454,7 +459,7 @@ function PickStage({
             ))
           )}
         </ul>
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex min-w-0 flex-wrap items-center gap-3">
           <Button
             variant="primary"
             size="lg"
@@ -484,7 +489,7 @@ function PickStage({
           <Button variant="quiet" onClick={() => dispatch({ type: 'clear-picks' })} disabled={state.picked.length === 0}>
             清空
           </Button>
-          <p className="text-[12px] text-ink-dim">对端会看到请求，选定目标文件夹并同意之后才开始搬</p>
+          <p className="min-w-0 break-words text-[12px] text-ink-dim">对端会看到请求，选定目标文件夹并同意之后才开始搬</p>
         </div>
       </section>
     </div>
@@ -517,12 +522,15 @@ function TransferStage({
       ) : null}
 
       {state.listening && !incoming ? (
-        <div className="flex flex-wrap items-center gap-3 border border-panel-edge bg-panel-face px-4 py-3">
-          <Lamp state="ready" />
+        <div className="flex min-w-0 flex-wrap items-center gap-3 border border-panel-edge bg-panel-face px-4 py-3">
+          <Lamp state={state.listening.warning ? 'fault' : 'ready'} />
           <span className="reading text-[13px] text-ink-dim">
             正在等待接收 · {state.listening.addr}:{state.listening.port}
             {state.listening.code ? ` · 配对码 ${state.listening.code}` : ''}
           </span>
+          {state.listening.warning ? (
+            <span className="min-w-0 break-all text-[13px] text-lamp-fault">{state.listening.warning}</span>
+          ) : null}
           <Button size="sm" variant="quiet" onClick={() => void run(async () => {
             await api.stopListen();
             dispatch({ type: 'listening', listening: null });

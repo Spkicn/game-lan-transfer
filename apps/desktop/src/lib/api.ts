@@ -80,7 +80,7 @@ export function listLocal(path: string | null): Promise<LocalEntry[]> {
 /** 开始等待接收传输请求 */
 export function startListen(iface: string | null, pairing: string | null): Promise<ListenInfo> {
   if (MOCK) {
-    return mock({ addr: '192.168.88.1', port: 27102, code: pairing });
+    return mock({ addr: '192.168.88.1', port: 27102, code: pairing, warning: null });
   }
   return invoke<ListenInfo>('start_listen', { iface, pairing });
 }

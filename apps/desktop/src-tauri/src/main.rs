@@ -137,12 +137,26 @@ struct RunningHost {
 
 /// 正在运行的请求监听
 struct Listening {
-    /// 请求监听器
-    listener: Arc<RequestListener>,
+    /// 请求监听器，端口被其他程序占用时为 None，此时只广播不收请求
+    listener: Option<Arc<RequestListener>>,
+    /// 轮询线程的句柄，停止时要等它退出再放掉监听器
+    poll: Option<thread::JoinHandle<()>>,
     /// 轮询停止标志
     stop: Arc<AtomicBool>,
     /// 广播停止标志，等待接收期间也要让对端能发现自己
     announce: Arc<AtomicBool>,
+    /// 监听地址
+    addr: SocketAddr,
+    /// 当前配对码
+    code: Option<String>,
+    /// 请求端口不可用时给界面看的原因
+    warning: Option<String>,
+}
+
+/// 本机实例号，同一进程内固定，用来过滤自己发出的广播
+fn local_instance() -> u64 {
+    static INSTANCE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *INSTANCE.get_or_init(discovery::new_instance)
 }
 
 /// 应用共享状态
@@ -190,7 +204,7 @@ fn discover_peers(iface: Option<String>, seconds: u64) -> Result<Vec<PeerEntry>,
     let ip = local_ip(iface.as_deref())?;
     let socket = discovery::bind(ip, discovery::DISCOVERY_PORT).map_err(describe)?;
     let timeout = Duration::from_secs(seconds.clamp(1, 30));
-    let peers = discovery::collect(&socket, timeout, None).map_err(describe)?;
+    let peers = discovery::collect(&socket, timeout, Some(local_instance())).map_err(describe)?;
     Ok(peers
         .into_iter()
         .map(|peer| PeerEntry {
@@ -287,7 +301,7 @@ fn start_host(
     let addr = host.local_addr();
     let stop = Arc::new(AtomicBool::new(false));
     let announce = Peer {
-        instance: discovery::new_instance(),
+        instance: local_instance(),
         name: discovery::local_name(),
         addr: ip,
         session_port: addr.port(),
@@ -536,6 +550,8 @@ struct ListenInfo {
     port: u16,
     /// 配对码，未启用时为空
     code: Option<String>,
+    /// 请求端口不可用时的原因，此时对端能看到本机但发不来请求
+    warning: Option<String>,
 }
 
 /// 发起传输的结果
@@ -648,23 +664,85 @@ fn start_listen(
     iface: Option<String>,
     pairing: Option<String>,
 ) -> Result<ListenInfo, String> {
-    stop_listen_inner(&state);
     let ip = local_ip(iface.as_deref())?;
     let code = pairing.filter(|value| !value.is_empty());
-    let listener = Arc::new(
-        RequestListener::start(SocketAddr::new(ip, session::REQUEST_PORT), code.clone())
-            .map_err(describe)?,
-    );
-    let addr = listener.local_addr();
-    let stop = Arc::new(AtomicBool::new(false));
-    let thread_listener = Arc::clone(&listener);
-    let thread_stop = Arc::clone(&stop);
+
+    // 已经在同一个地址上用同一个配对码等着了就直接复用，重复点击不再抢端口
+    if let Some(current) = lock(&state.listening).as_ref() {
+        if current.addr.ip() == ip && current.code == code {
+            return Ok(ListenInfo {
+                addr: current.addr.ip().to_string(),
+                port: current.addr.port(),
+                code: current.code.clone(),
+                warning: current.warning.clone(),
+            });
+        }
+    }
+    stop_listen_inner(&state);
+
+    // 先广播再抢端口：端口被占也要让对端能发现本机
+    let announce = Arc::new(AtomicBool::new(false));
+    let peer = Peer {
+        instance: local_instance(),
+        name: discovery::local_name(),
+        addr: ip,
+        session_port: 0,
+        platform: discovery::local_platform(),
+        free_bytes: 0,
+        pairing_required: code.is_some(),
+    };
+    spawn_announcer(ip, peer, Arc::clone(&announce))?;
+
+    let target = SocketAddr::new(ip, session::REQUEST_PORT);
+    let (listener, poll, stop, warning) = match RequestListener::start(target, code.clone()) {
+        Ok(listener) => {
+            let listener = Arc::new(listener);
+            let stop = Arc::new(AtomicBool::new(false));
+            let poll = spawn_request_poller(&app, Arc::clone(&listener), Arc::clone(&stop))?;
+            (Some(listener), Some(poll), stop, None)
+        }
+        Err(err) => (
+            None,
+            None,
+            Arc::new(AtomicBool::new(true)),
+            Some(format!(
+                "{}；对端能看到本机，但暂时发不来传输请求",
+                describe(err)
+            )),
+        ),
+    };
+    let port = listener
+        .as_ref()
+        .map_or(target.port(), |listener| listener.local_addr().port());
+    *lock(&state.listening) = Some(Listening {
+        listener,
+        poll,
+        stop,
+        announce,
+        addr: target,
+        code: code.clone(),
+        warning: warning.clone(),
+    });
+    Ok(ListenInfo {
+        addr: ip.to_string(),
+        port,
+        code,
+        warning,
+    })
+}
+
+/// 轮询传入请求并转成事件
+fn spawn_request_poller(
+    app: &AppHandle,
+    listener: Arc<RequestListener>,
+    stop: Arc<AtomicBool>,
+) -> Result<thread::JoinHandle<()>, String> {
     let thread_app = app.clone();
     thread::Builder::new()
         .name("gamelift-request-poll".to_owned())
         .spawn(move || {
-            while !thread_stop.load(Ordering::Relaxed) {
-                let Some(incoming) = thread_listener.poll(Duration::from_millis(300)) else {
+            while !stop.load(Ordering::Relaxed) {
+                let Some(incoming) = listener.poll(Duration::from_millis(300)) else {
                     continue;
                 };
                 let items = incoming
@@ -691,29 +769,7 @@ fn start_listen(
                 );
             }
         })
-        .map_err(io_text)?;
-    // 等待接收期间也广播，否则两边都停在连接页时谁也发现不了谁
-    let announce = Arc::new(AtomicBool::new(false));
-    let peer = Peer {
-        instance: discovery::new_instance(),
-        name: discovery::local_name(),
-        addr: ip,
-        session_port: 0,
-        platform: discovery::local_platform(),
-        free_bytes: 0,
-        pairing_required: code.is_some(),
-    };
-    spawn_announcer(ip, peer, Arc::clone(&announce))?;
-    *lock(&state.listening) = Some(Listening {
-        listener,
-        stop,
-        announce,
-    });
-    Ok(ListenInfo {
-        addr: ip.to_string(),
-        port: addr.port(),
-        code,
-    })
+        .map_err(io_text)
 }
 
 /// 停止接收请求
@@ -722,11 +778,15 @@ fn stop_listen(state: State<'_, AppState>) {
     stop_listen_inner(&state);
 }
 
-/// 停掉当前监听并等轮询线程退出
+/// 停掉当前监听：先等轮询线程退出，再放掉监听器把端口交还系统
 fn stop_listen_inner(state: &AppState) {
-    if let Some(listening) = lock(&state.listening).take() {
+    if let Some(mut listening) = lock(&state.listening).take() {
         listening.stop.store(true, Ordering::Relaxed);
         listening.announce.store(true, Ordering::Relaxed);
+        if let Some(handle) = listening.poll.take() {
+            let _ = handle.join();
+        }
+        listening.listener = None;
     }
 }
 
@@ -756,7 +816,13 @@ fn respond_request(
     let Some(listening) = guard.as_ref() else {
         return Err("当前没有在等待接收".to_owned());
     };
-    listening.listener.respond(id, &decision).map_err(describe)
+    let Some(listener) = listening.listener.as_ref() else {
+        return Err(listening
+            .warning
+            .clone()
+            .unwrap_or_else(|| "请求端口不可用，暂时收不到传输请求".to_owned()));
+    };
+    listener.respond(id, &decision).map_err(describe)
 }
 
 /// 把选中的内容托管起来并向对端发起传输请求
@@ -825,7 +891,7 @@ fn start_send(
     let counters = host.counters();
     let stop = Arc::new(AtomicBool::new(false));
     let announce = Peer {
-        instance: discovery::new_instance(),
+        instance: local_instance(),
         name: discovery::local_name(),
         addr: ip,
         session_port: port,
@@ -852,6 +918,12 @@ fn start_send(
         platform,
     };
     let request_addr = parse_peer_with_default(&peer, session::REQUEST_PORT)?;
+    if !same_subnet(ip, request_addr.ip()) {
+        return Err(format!(
+            "本机 {ip} 与对端 {} 不在同一个网段，广播能互相看见但数据传不过去：在一端点「本机用 .1」、另一端点「本机用 .2」，或把两台机器接到同一个路由器上",
+            request_addr.ip()
+        ));
+    }
     let decision = session::request_transfer(request_addr, &request, session::ANSWER_TIMEOUT)
         .map_err(describe)?;
     if matches!(decision, Decision::Approve { .. }) {
@@ -1032,6 +1104,14 @@ fn local_ip(explicit: Option<&str>) -> Result<IpAddr, String> {
         .ip
         .parse()
         .map_err(|_| format!("网口地址不合法: {}", picked.ip))
+}
+
+/// 两个地址是否在同一个 /24 网段，用于提前拦住走不通的传输
+fn same_subnet(left: IpAddr, right: IpAddr) -> bool {
+    match (left, right) {
+        (IpAddr::V4(a), IpAddr::V4(b)) => a.octets()[..3] == b.octets()[..3],
+        _ => true,
+    }
 }
 
 /// 解析对端地址，接受 `IP` 或 `IP:端口`，未给端口时用传输端口

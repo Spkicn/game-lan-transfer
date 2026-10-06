@@ -58,6 +58,8 @@ export interface ListenInfo {
   addr: string;
   port: number;
   code: string | null;
+  /** 请求端口不可用时的原因，此时对端能看到本机但发不来请求 */
+  warning: string | null;
 }
 
 /** 传入请求里的一条内容 */
@@ -204,7 +206,8 @@ export function reduce(state: AppState, action: Action): AppState {
     case 'busy':
       return { ...state, busy: action.busy };
     case 'error':
-      return { ...state, error: action.message, busy: false };
+      // 出错就结束这一单的进行中状态，否则界面会一直停在传输中
+      return { ...state, error: action.message, busy: false, running: false };
     case 'notice':
       return { ...state, notice: action.message };
     case 'network':

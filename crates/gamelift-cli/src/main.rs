@@ -36,6 +36,12 @@ use gamelift_launchers::adapters;
 use gamelift_launchers::steam::{self, SteamAdapter};
 use gamelift_launchers::LauncherAdapter as _;
 
+/// 本机实例号，同一进程内固定，用来过滤自己发出的广播
+fn local_instance() -> u64 {
+    static INSTANCE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *INSTANCE.get_or_init(discovery::new_instance)
+}
+
 fn main() {
     if let Err(err) = run() {
         eprintln!("错误: {err:#}");
@@ -274,8 +280,12 @@ fn peers_cmd(args: &[String]) -> Result<()> {
     let socket =
         discovery::bind(local_ip, discovery::DISCOVERY_PORT).context("绑定发现端口失败")?;
     println!("在 {local_ip} 上监听发现广播，最多 {seconds} 秒…");
-    let peers =
-        discovery::collect(&socket, Duration::from_secs(seconds), None).context("收集公告失败")?;
+    let peers = discovery::collect(
+        &socket,
+        Duration::from_secs(seconds),
+        Some(local_instance()),
+    )
+    .context("收集公告失败")?;
     if peers.is_empty() {
         println!("未发现对端。请确认对端已运行 gamelift host，且两端在同一网段。");
         return Ok(());
@@ -352,7 +362,7 @@ fn host_cmd(args: &[String]) -> Result<()> {
 
     let socket = discovery::bind(bind_ip, 0).context("创建广播套接字失败")?;
     let peer = Peer {
-        instance: discovery::new_instance(),
+        instance: local_instance(),
         name: discovery::local_name(),
         addr: bind_ip,
         session_port: host.local_addr().port(),
@@ -549,7 +559,7 @@ fn receiver_announcer(dest_parent: &Path, iface: Option<&str>) -> Result<Arc<Ato
     let local_ip = resolve_iface(iface)?;
     let socket = discovery::bind(local_ip, 0).context("创建广播套接字失败")?;
     let peer = Peer {
-        instance: discovery::new_instance(),
+        instance: local_instance(),
         name: discovery::local_name(),
         addr: local_ip,
         session_port: 0,

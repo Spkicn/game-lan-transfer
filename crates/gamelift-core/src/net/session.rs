@@ -206,8 +206,7 @@ impl RequestListener {
                 "接收请求必须绑定明确的直连地址，不能监听全部接口".to_owned(),
             ));
         }
-        let listener =
-            TcpListener::bind(bind).map_err(|err| Error::Io(format!("监听 {bind} 失败: {err}")))?;
+        let listener = bind_with_retry(bind)?;
         listener
             .set_nonblocking(true)
             .map_err(|err| Error::Io(format!("设置非阻塞失败: {err}")))?;
@@ -290,6 +289,30 @@ impl Drop for RequestListener {
     fn drop(&mut self) {
         self.shutdown();
     }
+}
+
+/// 绑定监听地址，端口刚被上一次监听释放时重试几次
+///
+/// 同一个进程里重新开始等待接收时，上一次的套接字可能还没完全关闭
+fn bind_with_retry(bind: SocketAddr) -> Result<TcpListener> {
+    let mut last: Option<std::io::Error> = None;
+    for _ in 0..8 {
+        match TcpListener::bind(bind) {
+            Ok(listener) => return Ok(listener),
+            Err(err) if err.kind() == std::io::ErrorKind::AddrInUse => {
+                last = Some(err);
+                thread::sleep(Duration::from_millis(250));
+            }
+            Err(err) => return Err(Error::Io(format!("监听 {bind} 失败: {err}"))),
+        }
+    }
+    Err(Error::Io(format!(
+        "监听 {bind} 失败: {}",
+        last.map_or_else(
+            || "端口一直被占用".to_owned(),
+            |err| format!("{err}，端口被其他程序占用"),
+        )
+    )))
 }
 
 /// 接受连接并处理请求
@@ -501,6 +524,28 @@ mod tests {
         // 被拒绝的请求不应进入界面队列
         assert!(listener.poll(Duration::from_millis(200)).is_none());
         listener.shutdown();
+    }
+
+    #[test]
+    fn restarting_on_the_same_port_succeeds() {
+        // 界面上重复点「找对端」会在同一端口重新开始等待，不能报端口被占用
+        let bind = SocketAddr::from(([127, 0, 0, 1], 18400));
+        let mut first = RequestListener::start(bind, None).expect("first");
+        assert_eq!(first.local_addr().port(), 18400);
+        first.shutdown();
+        drop(first);
+        let mut second = RequestListener::start(bind, None).expect("second");
+        assert_eq!(second.local_addr().port(), 18400);
+        second.shutdown();
+    }
+
+    #[test]
+    fn occupied_port_is_reported_after_retries() {
+        let bind = SocketAddr::from(([127, 0, 0, 1], 18401));
+        let held = TcpListener::bind(bind).expect("hold");
+        let err = RequestListener::start(bind, None).expect_err("must fail");
+        assert!(matches!(err, Error::Io(_)), "got {err:?}");
+        drop(held);
     }
 
     #[test]

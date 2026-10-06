@@ -7,6 +7,7 @@ import {
   formatEta,
   formatRate,
   percent,
+  sameSubnet,
   spaceAdvice,
 } from '../src/lib/format';
 
@@ -82,6 +83,19 @@ describe('spaceAdvice', () => {
 
   it('无需空间时不提示', () => {
     expect(spaceAdvice(1024, 0)).toBe('');
+  });
+});
+
+describe('sameSubnet', () => {
+  it('前三位相同才算同网段', () => {
+    expect(sameSubnet('192.168.88.1', '192.168.88.2')).toBe(true);
+    expect(sameSubnet('192.168.88.1', '10.10.10.1')).toBe(false);
+  });
+
+  it('带端口也能比较，缺值时按同网段处理', () => {
+    expect(sameSubnet('192.168.88.1', '192.168.88.2:27102')).toBe(true);
+    expect(sameSubnet(null, '10.10.10.1')).toBe(true);
+    expect(sameSubnet('不是地址', '10.10.10.1')).toBe(true);
   });
 });
 

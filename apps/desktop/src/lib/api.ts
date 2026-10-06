@@ -10,12 +10,14 @@ import { mockEntries, mockGames, mockNetwork, mockPeers, mockProgressStep } from
 import type {
   GameEntry,
   IncomingEvent,
+  LinkRole,
   ListenInfo,
   LocalEntry,
   NetworkStatus,
   PeerEntry,
   Progress,
   RecvSummary,
+  RoleSetup,
   SendInfo,
 } from './state';
 
@@ -53,20 +55,27 @@ export function networkStatus(): Promise<NetworkStatus> {
   return invoke<NetworkStatus>('network_status');
 }
 
-/** 配置直连地址 */
-export function setupLink(host: number): Promise<string> {
+/** 按角色配置直连地址，发送端用 .1，接收端用 .2 */
+export function configureRole(role: LinkRole): Promise<RoleSetup> {
   if (MOCK) {
-    return mock(`192.168.88.${host}`);
+    return mock(
+      {
+        nic_name: '以太网',
+        ip: role === 'sender' ? '192.168.88.1' : '192.168.88.2',
+        already: false,
+      },
+      300,
+    );
   }
-  return invoke<string>('setup_link', { host });
+  return invoke<RoleSetup>('configure_role', { role });
 }
 
-/** 还原直连配置 */
-export function revertLink(): Promise<void> {
+/** 还原直连配置，两种角色的地址都清理 */
+export function resetLink(): Promise<void> {
   if (MOCK) {
     return mock(undefined);
   }
-  return invoke<void>('revert_link');
+  return invoke<void>('reset_link');
 }
 
 /** 当前是否以管理员身份运行 */

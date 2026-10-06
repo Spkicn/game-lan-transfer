@@ -32,6 +32,7 @@ import {
   transferComplete,
   type AppState,
   type IncomingEvent,
+  type LinkRole,
   type LocalEntry,
 } from './lib/state';
 
@@ -177,6 +178,7 @@ function ConnectStage({
 }) {
   const network = state.network;
   const peer = state.peer;
+  const role = network?.link_role ?? null;
   const linkState: LampState = peer ? 'ready' : state.busy ? 'flow' : 'idle';
 
   const discover = () =>
@@ -194,9 +196,10 @@ function ConnectStage({
     });
 
   return (
-    <div className="grid h-full min-h-[440px] gap-6 md:grid-cols-[1.15fr_0.85fr_1.15fr]">
+    <div className="flex h-full min-h-[440px] flex-col gap-6">
+      <div className="grid min-h-0 flex-1 gap-6 md:grid-cols-[1.15fr_0.85fr_1.15fr]">
       <Port
-        label="本机"
+        label={role === 'sender' ? '本机 · 发送端' : role === 'receiver' ? '本机 · 接收端' : '本机'}
         name={network?.nic_name ?? (state.busy ? '正在检测' : '未检测到网卡')}
         endpoint={network?.address ?? '—'}
         lamp={network === null ? 'idle' : network.address ? 'ready' : 'fault'}
@@ -204,53 +207,60 @@ function ConnectStage({
         <div className="flex flex-wrap gap-2">
           <Button
             size="sm"
+            variant="quiet"
             disabled={state.busy}
             onClick={() => void run(async () => dispatch({ type: 'network', network: await api.networkStatus() }))}
           >
             <RefreshCw className="size-3.5" /> 重新检测
           </Button>
-          <Button
-            size="sm"
-            disabled={state.busy}
-            onClick={() =>
-              void run(async () => {
-                const address = await api.setupLink(1);
-                dispatch({ type: 'notice', message: `已配置直连地址 ${address}` });
-                dispatch({ type: 'network', network: await api.networkStatus() });
-              })
-            }
-          >
-            <PlugZap className="size-3.5" /> 本机用 .1
-          </Button>
-          <Button
-            size="sm"
-            disabled={state.busy}
-            onClick={() =>
-              void run(async () => {
-                const address = await api.setupLink(2);
-                dispatch({ type: 'notice', message: `已配置直连地址 ${address}` });
-                dispatch({ type: 'network', network: await api.networkStatus() });
-              })
-            }
-          >
-            本机用 .2
-          </Button>
-          <Button
-            size="sm"
-            variant="quiet"
-            disabled={state.busy}
-            onClick={() =>
-              void run(async () => {
-                await api.revertLink();
-                dispatch({ type: 'notice', message: '直连配置已还原' });
-                dispatch({ type: 'network', network: await api.networkStatus() });
-              })
-            }
-          >
-            还原
-          </Button>
+          {role ? (
+            <Button
+              size="sm"
+              variant="quiet"
+              disabled={state.busy}
+              onClick={() =>
+                void run(async () => {
+                  await api.resetLink();
+                  dispatch({ type: 'notice', message: '已还原网络设置' });
+                  dispatch({ type: 'network', network: await api.networkStatus() });
+                })
+              }
+            >
+              还原网络设置
+            </Button>
+          ) : null}
         </div>
-        <p className="text-[12px] text-ink-dim">{network?.hint ?? '正在读取网络'}</p>
+        {role === null ? null : (
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <Lamp state="ready" />
+            <span className="text-[12px] text-ink-dim">
+              这是一台{role === 'sender' ? '发送端' : '接收端'}
+            </span>
+            <Button
+              size="sm"
+              variant="quiet"
+              disabled={state.busy}
+              onClick={() =>
+                void run(async () => {
+                  const target = role === 'sender' ? 'receiver' : 'sender';
+                  const setup = await api.configureRole(target);
+                  dispatch({
+                    type: 'notice',
+                    message: `已改配成${target === 'sender' ? '发送端' : '接收端'} ${setup.ip}`,
+                  });
+                  dispatch({ type: 'network', network: await api.networkStatus() });
+                })
+              }
+            >
+              改做{role === 'sender' ? '接收端' : '发送端'}
+            </Button>
+          </div>
+        )}
+        {role !== null || network === null ? (
+          <p className="min-w-0 break-words text-[12px] text-ink-dim">
+            {network?.hint ?? '正在读取网络'}
+          </p>
+        ) : null}
         {state.elevated === false ? (
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             <span className="label text-lamp-standby">未提权</span>
@@ -333,7 +343,63 @@ function ConnectStage({
           </ul>
         ) : null}
       </Port>
+      </div>
+      {role === null ? <RoleBand state={state} dispatch={dispatch} run={run} /> : null}
     </div>
+  );
+}
+
+/** 首次进入时的角色选择：把 .1 与 .2 这层细节收进软件里 */
+function RoleBand({
+  state,
+  dispatch,
+  run,
+}: {
+  state: AppState;
+  dispatch: Dispatch;
+  run: Run;
+}) {
+  const pick = (role: LinkRole) =>
+    void run(async () => {
+      const setup = await api.configureRole(role);
+      const label = role === 'sender' ? '发送端' : '接收端';
+      const peerLabel = role === 'sender' ? '接收端' : '发送端';
+      dispatch({
+        type: 'notice',
+        message: setup.already
+          ? `早就配好了：${label} ${setup.ip}`
+          : `已配成${label} ${setup.ip}，另一台选${peerLabel}即可`,
+      });
+      dispatch({ type: 'network', network: await api.networkStatus() });
+    });
+
+  return (
+    <section className="flex min-w-0 flex-wrap items-center gap-4 border border-panel-edge bg-panel-face px-4 py-3">
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <span className="label">这台机器用来</span>
+        <p className="min-w-0 break-words text-[13px] text-ink-dim">
+          两台机器本来就在同一个局域网时不用管这一步；用一根网线直连时，一台选发送端、另一台选接收端，地址由软件配好，不需要改系统网络设置
+        </p>
+      </div>
+      <div className="flex gap-2">
+        <Button
+          size="lg"
+          disabled={state.busy}
+          onClick={() => pick('sender')}
+          aria-label="把本机配成发送端"
+        >
+          <PlugZap className="size-4" /> 发送端
+        </Button>
+        <Button
+          size="lg"
+          disabled={state.busy}
+          onClick={() => pick('receiver')}
+          aria-label="把本机配成接收端"
+        >
+          接收端
+        </Button>
+      </div>
+    </section>
   );
 }
 

@@ -19,6 +19,27 @@ pub struct Nic {
     pub is_physical: bool,
     /// 现有 IPv4 地址，`LinkLocal` 169.254 除外；None 表示未配置
     pub current_ipv4: Option<String>,
+    /// 该网口上的全部 IPv4 地址，判断是否已配置过直连地址时要看全
+    pub all_ipv4: Vec<String>,
+}
+
+impl Nic {
+    /// 该网口是否已经有这个地址
+    #[must_use]
+    pub fn has_address(&self, ip: &str) -> bool {
+        self.all_ipv4.iter().any(|value| value == ip)
+    }
+}
+
+/// 一次直连配置的结果
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkSetup {
+    /// 被配置的网口名
+    pub nic_name: String,
+    /// 配置后的地址
+    pub ip: String,
+    /// 之前就已经配好，本次没有改动
+    pub already: bool,
 }
 
 /// 执行一段 PowerShell，输出按 UTF-8 解，失败时报可读的原因
@@ -104,17 +125,17 @@ pub fn is_elevated() -> bool {
 pub const ELEVATION_HINT: &str =
     "需要管理员权限：关闭本窗口，右键 GameLift 选择「以管理员身份运行」后再试";
 
-/// 罗列所有网口，单次 PowerShell 调用取齐名称、描述与 IP
+/// 罗列所有网口，单次 PowerShell 调用取齐名称、描述与全部 IPv4
 /// 输出编码显式设为 UTF-8，避免中文 Windows 控制台乱码
 #[must_use]
 pub fn list_nics() -> Vec<Nic> {
     let ps = "[Console]::OutputEncoding=[Text.Encoding]::UTF8; \
               Get-NetAdapter | ForEach-Object { \
                 $n=$_.Name; \
-                $ip=(Get-NetIPAddress -InterfaceAlias $n -AddressFamily IPv4 -ErrorAction SilentlyContinue \
+                $ips=(Get-NetIPAddress -InterfaceAlias $n -AddressFamily IPv4 -ErrorAction SilentlyContinue \
                      | Where-Object { $_.IPAddress -notlike '169.254*' -and $_.IPAddress -notlike '127.*' } \
-                     | Select-Object -First 1).IPAddress; \
-                '{0}|{1}|{2}' -f $n, $_.InterfaceDescription, $ip \
+                     | ForEach-Object { $_.IPAddress }) -join ','; \
+                '{0}|{1}|{2}' -f $n, $_.InterfaceDescription, $ips \
               }";
     let output = std::process::Command::new("powershell")
         .args(["-NoProfile", "-Command", ps])
@@ -126,14 +147,16 @@ pub fn list_nics() -> Vec<Nic> {
     let text = String::from_utf8_lossy(&out.stdout);
     let mut nics = Vec::new();
     for line in text.lines() {
-        let Some((name, desc, ip)) = split_nic_line(line) else {
+        let Some((name, desc, addresses)) = split_nic_line(line) else {
             continue;
         };
         if name.is_empty() {
             continue;
         }
+        let current_ipv4 = addresses.first().cloned();
         nics.push(Nic {
-            current_ipv4: ip,
+            current_ipv4,
+            all_ipv4: addresses,
             is_physical: is_physical_ethernet(&name, &desc),
             description: desc,
             name,
@@ -142,17 +165,22 @@ pub fn list_nics() -> Vec<Nic> {
     nics
 }
 
-/// 拆 `名称|描述|IP` 行，最后一段是 IP 且允许为空
-/// 描述若含 `|`，靠 rsplitn 保证 IP 仍取最后一段
-fn split_nic_line(line: &str) -> Option<(String, String, Option<String>)> {
-    let (head, ip_raw) = line.rsplit_once('|')?;
+/// 拆 `名称|描述|地址表` 行，最后一段是逗号分隔的 IPv4 列表，允许为空
+/// 描述若含 `|`，靠 rsplitn 保证地址仍取最后一段
+fn split_nic_line(line: &str) -> Option<(String, String, Vec<String>)> {
+    let (head, ips_raw) = line.rsplit_once('|')?;
     let (name_raw, desc_raw) = head.split_once('|')?;
-    let ip = if ip_raw.trim().is_empty() {
-        None
-    } else {
-        Some(ip_raw.trim().to_owned())
-    };
-    Some((name_raw.trim().to_owned(), desc_raw.trim().to_owned(), ip))
+    let addresses = ips_raw
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .collect();
+    Some((
+        name_raw.trim().to_owned(),
+        desc_raw.trim().to_owned(),
+        addresses,
+    ))
 }
 
 /// 物理以太网口判定：名称或描述命中虚拟网卡、无线标记即排除
@@ -192,32 +220,63 @@ fn is_physical_ethernet(name: &str, description: &str) -> bool {
 
 /// 给第一个物理以太网口配置直连地址，不设网关并把网络位置设为专用
 ///
-/// 网口已有同网段地址时视为已配置并直接返回
+/// 网口上已经有这个地址时视为已配置并直接返回
 ///
 /// # Errors
 ///
 /// - [`Error::NicNotFound`]：找不到物理以太网口
 /// - [`Error::Shell`]：未以管理员运行，或 PowerShell 执行失败
-pub fn setup_direct_link(host_octet: u8) -> Result<String> {
+pub fn configure_direct_link(host_octet: u8) -> Result<LinkSetup> {
     let Some(nic) = list_nics().into_iter().find(|n| n.is_physical) else {
         return Err(Error::NicNotFound);
     };
     let ip = format!("{LINK_SUBNET_PREFIX}.{host_octet}");
-    if let Some(cur) = &nic.current_ipv4 {
-        if cur.starts_with(LINK_SUBNET_PREFIX) {
-            return Ok(cur.clone());
-        }
+    // 网卡上任何一个地址命中都算已配置，只看第一个地址会重复下发并撞上「已存在」
+    if nic.has_address(&ip) {
+        return Ok(LinkSetup {
+            nic_name: nic.name,
+            ip,
+            already: true,
+        });
     }
     if !is_elevated() {
         return Err(Error::Shell(ELEVATION_HINT.to_owned()));
     }
     let safe_name = nic.name.replace('\'', "''");
+    // 先查再补，避免网络波动后重试时报「地址已存在」
     let script = format!(
-        "New-NetIPAddress -InterfaceAlias '{safe_name}' -IPAddress {ip} -PrefixLength 24 -ErrorAction Stop; \
+        "$existing = Get-NetIPAddress -InterfaceAlias '{safe_name}' -AddressFamily IPv4 -ErrorAction SilentlyContinue \
+           | Where-Object {{ $_.IPAddress -eq '{ip}' }}; \
+         if (-not $existing) {{ \
+           New-NetIPAddress -InterfaceAlias '{safe_name}' -IPAddress {ip} -PrefixLength 24 -ErrorAction Stop \
+         }}; \
          Set-NetConnectionProfile -InterfaceAlias '{safe_name}' -NetworkCategory Private -ErrorAction SilentlyContinue"
     );
     run_powershell(&script)?;
-    Ok(ip)
+    // 读回确认，没配上就报出来，不要假装成功
+    let applied = list_nics()
+        .into_iter()
+        .any(|candidate| candidate.name == nic.name && candidate.has_address(&ip));
+    if !applied {
+        return Err(Error::Shell(format!(
+            "地址 {ip} 没有落到网口 {} 上，请在「网络和 Internet」里手动确认该网口的 IPv4 设置",
+            nic.name
+        )));
+    }
+    Ok(LinkSetup {
+        nic_name: nic.name,
+        ip,
+        already: false,
+    })
+}
+
+/// 配置直连地址并返回地址文本
+///
+/// # Errors
+///
+/// 同 [`configure_direct_link`]
+pub fn setup_direct_link(host_octet: u8) -> Result<String> {
+    configure_direct_link(host_octet).map(|setup| setup.ip)
 }
 
 /// 还原直连配置：删本工具配置的 192.168.88.x 地址并恢复 DHCP
@@ -340,8 +399,36 @@ mod tests {
             name: name.to_owned(),
             description: format!("{name} 描述"),
             is_physical,
+            all_ipv4: ip.map(str::to_owned).into_iter().collect(),
             current_ipv4: ip.map(str::to_owned),
         }
+    }
+
+    #[test]
+    fn nic_sees_every_address_on_the_adapter() {
+        // 只看第一个地址会重复下发直连配置并撞上「地址已存在」
+        let adapter = Nic {
+            name: "以太网".to_owned(),
+            description: "Realtek".to_owned(),
+            is_physical: true,
+            current_ipv4: Some("10.10.10.1".to_owned()),
+            all_ipv4: vec!["10.10.10.1".to_owned(), "192.168.88.2".to_owned()],
+        };
+        assert!(adapter.has_address("192.168.88.2"));
+        assert!(!adapter.has_address("192.168.88.1"));
+    }
+
+    #[test]
+    fn parses_multiple_addresses_per_adapter() {
+        let parsed = split_nic_line("以太网|Realtek GbE|10.10.10.1,192.168.88.2").expect("parse");
+        assert_eq!(parsed.0, "以太网");
+        assert_eq!(parsed.1, "Realtek GbE");
+        assert_eq!(
+            parsed.2,
+            vec!["10.10.10.1".to_owned(), "192.168.88.2".to_owned()]
+        );
+        let empty = split_nic_line("WLAN|Intel AX201|").expect("parse");
+        assert_eq!(empty.2, Vec::<String>::new());
     }
 
     #[test]
@@ -437,7 +524,7 @@ mod tests {
             Some((
                 "以太网".to_owned(),
                 "Gigabit Ethernet Controller".to_owned(),
-                Some("192.168.88.1".to_owned())
+                vec!["192.168.88.1".to_owned()]
             ))
         );
         // 无 IP 的网口
@@ -446,13 +533,13 @@ mod tests {
             Some((
                 "本地连接* 10".to_owned(),
                 "Microsoft Wi-Fi Direct Virtual Adapter #2".to_owned(),
-                None
+                Vec::new()
             ))
         );
-        // 描述里含 | 时 IP 仍是最后一段
+        // 描述里含 | 时地址仍是最后一段
         assert_eq!(
-            split_nic_line("a|desc|with|pipe|10.0.0.1").map(|(_, _, ip)| ip),
-            Some(Some("10.0.0.1".to_owned()))
+            split_nic_line("a|desc|with|pipe|10.0.0.1").map(|(_, _, ips)| ips),
+            Some(vec!["10.0.0.1".to_owned()])
         );
         // 行数不足
         assert_eq!(split_nic_line("只有一段"), None);

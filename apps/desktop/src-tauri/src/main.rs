@@ -461,6 +461,8 @@ struct NetworkStatus {
     is_physical: bool,
     /// 是否已落在直连网段
     direct_link: bool,
+    /// 本机在直连里的角色，未配置直连时为空
+    link_role: Option<String>,
     /// 下一步提示
     hint: String,
 }
@@ -479,12 +481,21 @@ fn network_status() -> NetworkStatus {
         ),
         None => (None, None, false, false),
     };
+    let link_role = address.as_deref().and_then(|value| {
+        if value == format!("{}.1", link::LINK_SUBNET_PREFIX) {
+            Some("sender".to_owned())
+        } else if value == format!("{}.2", link::LINK_SUBNET_PREFIX) {
+            Some("receiver".to_owned())
+        } else {
+            None
+        }
+    });
     let hint = if address.is_none() {
-        "没有可用的本机地址：先连上网络，或点「配置直连」自动配一个".to_owned()
-    } else if direct_link {
-        "已配好直连地址，插上网线就能与对端互通".to_owned()
+        "没有可用的本机地址：先连上网络，再选这台机器是发送端还是接收端".to_owned()
+    } else if link_role.is_some() {
+        "直连已就绪，插上网线就能与对端互通".to_owned()
     } else if is_physical {
-        "用的是以太网口，建议点「配置直连」把两台机器放进同一网段".to_owned()
+        "两台机器直连时，选这台是发送端还是接收端，软件会自动配好地址".to_owned()
     } else {
         "当前走无线网卡，同一局域网内也能传；插网线会快很多".to_owned()
     };
@@ -502,6 +513,7 @@ fn network_status() -> NetworkStatus {
         nic_name,
         is_physical,
         direct_link,
+        link_role,
         hint,
     }
 }
@@ -516,6 +528,61 @@ fn setup_link(host: u8) -> Result<String, String> {
     link::setup_direct_link(host).map_err(describe)
 }
 
+/// 按角色配置直连地址的结果
+#[derive(Debug, Clone, Serialize)]
+struct RoleSetup {
+    /// 被配置的网口
+    nic_name: String,
+    /// 配置后的地址
+    ip: String,
+    /// 之前就已经配好，本次没有改动
+    already: bool,
+}
+
+/// 角色对应的地址末位：发送端用 .1，接收端用 .2
+fn role_octet(role: &str) -> Result<u8, String> {
+    match role {
+        "sender" => Ok(1),
+        "receiver" => Ok(2),
+        other => Err(format!("未知角色: {other}")),
+    }
+}
+
+/// 按角色把本机配成发送端或接收端
+///
+/// # Errors
+///
+/// 角色不认识、找不到物理网口或未提权时返回说明
+#[tauri::command]
+fn configure_role(role: String) -> Result<RoleSetup, String> {
+    let octet = role_octet(&role)?;
+    let setup = link::configure_direct_link(octet).map_err(describe)?;
+    Ok(RoleSetup {
+        nic_name: setup.nic_name,
+        ip: setup.ip,
+        already: setup.already,
+    })
+}
+
+/// 还原直连配置，两种角色的地址都清理一遍
+///
+/// # Errors
+///
+/// 还原失败时返回说明
+#[tauri::command]
+fn reset_link() -> Result<(), String> {
+    let mut first_error = None;
+    for octet in [1_u8, 2] {
+        if let Err(err) = link::revert_direct_link(octet) {
+            first_error.get_or_insert_with(|| describe(err));
+        }
+    }
+    match first_error {
+        Some(message) => Err(message),
+        None => Ok(()),
+    }
+}
+
 /// 还原直连配置，两端都清理一遍
 ///
 /// # Errors
@@ -523,9 +590,7 @@ fn setup_link(host: u8) -> Result<String, String> {
 /// 还原失败时返回说明
 #[tauri::command]
 fn revert_link() -> Result<(), String> {
-    link::revert_direct_link(1).map_err(describe)?;
-    let _ = link::revert_direct_link(2);
-    Ok(())
+    reset_link()
 }
 
 /// 本机目录里的一个条目
@@ -1073,6 +1138,8 @@ fn main() {
             network_status,
             setup_link,
             revert_link,
+            configure_role,
+            reset_link,
             elevation_status,
             relaunch_elevated,
             list_local,

@@ -50,7 +50,19 @@ export interface NetworkStatus {
   nic_name: string | null;
   is_physical: boolean;
   direct_link: boolean;
+  /** 本机在直连里的角色，未配置直连时为空 */
+  link_role: LinkRole | null;
   hint: string;
+}
+
+/** 直连角色：发送端用 .1，接收端用 .2 */
+export type LinkRole = 'sender' | 'receiver';
+
+/** 一次角色配置的结果 */
+export interface RoleSetup {
+  nic_name: string;
+  ip: string;
+  already: boolean;
 }
 
 /** 接收监听 */

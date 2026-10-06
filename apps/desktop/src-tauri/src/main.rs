@@ -355,6 +355,7 @@ fn start_recv(
     pairing: Option<String>,
     force: bool,
     into_destination: bool,
+    claim_root: Option<String>,
 ) -> Result<RecvSummary, String> {
     let addr = parse_peer(&peer)?;
     let dest_parent = PathBuf::from(&dest);
@@ -373,7 +374,9 @@ fn start_recv(
         pairing,
         want,
         dest_parent,
-        claim_root: claim_root_for(platform.as_deref().unwrap_or("steam"), &info.root_name),
+        claim_root: claim_root
+            .map(PathBuf::from)
+            .or_else(|| claim_root_for(platform.as_deref().unwrap_or("files"), &info.root_name)),
         streams: DEFAULT_STREAMS,
         chunk_bytes: net::DEFAULT_CHUNK_BYTES,
         cancel: Some(Arc::clone(&cancel)),
@@ -1152,6 +1155,7 @@ fn main() {
             elevation_status,
             relaunch_elevated,
             startup_role,
+            steam_libraries,
             list_local,
             start_listen,
             stop_listen,
@@ -1209,6 +1213,36 @@ fn startup_role() -> Option<String> {
         }
     }
     None
+}
+
+/// 接收端可选的 Steam 库
+#[derive(Debug, Clone, Serialize)]
+struct SteamLibraryInfo {
+    /// 展示名，取库的上级目录
+    label: String,
+    /// 游戏落盘目录，即 `<库>\steamapps\common`
+    install_dir: String,
+    /// 认领文件目录，即 `<库>\steamapps`
+    claim_root: String,
+    /// 该盘剩余空间
+    free_bytes: u64,
+}
+
+/// 列出本机所有 Steam 库，供接收端挑装到哪个盘
+#[tauri::command]
+fn steam_libraries() -> Vec<SteamLibraryInfo> {
+    gamelift_launchers::steam::libraries()
+        .into_iter()
+        .filter_map(|apps| {
+            let library = apps.parent()?.to_path_buf();
+            Some(SteamLibraryInfo {
+                label: library.to_string_lossy().into_owned(),
+                install_dir: apps.join("common").to_string_lossy().into_owned(),
+                claim_root: apps.to_string_lossy().into_owned(),
+                free_bytes: link::free_bytes_at(&library).unwrap_or(0),
+            })
+        })
+        .collect()
 }
 
 /// 解析本机地址，未给定时优先物理以太网口，其次任意有地址的网卡

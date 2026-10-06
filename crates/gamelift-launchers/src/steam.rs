@@ -18,7 +18,7 @@ impl LauncherAdapter for SteamAdapter {
     }
 
     fn scan(&self) -> Result<Vec<InstalledGame>, AdapterError> {
-        if steam_libraries().is_empty() {
+        if libraries().is_empty() {
             Err(AdapterError::LauncherNotFound {
                 platform: "steam".into(),
             })
@@ -73,8 +73,10 @@ fn steam_path_from_registry() -> Option<PathBuf> {
 }
 
 /// 枚举全部库的 steamapps 目录，含 libraryfolders.vdf 注册的额外库
+///
+/// 接收端挑「装到哪个盘」时用这个列表
 #[must_use]
-fn steam_libraries() -> Vec<PathBuf> {
+pub fn libraries() -> Vec<PathBuf> {
     let Some(root) = steam_root() else {
         return Vec::new();
     };
@@ -102,7 +104,7 @@ fn steam_libraries() -> Vec<PathBuf> {
 
 /// 扫描所有库，某库或某清单读取失败时跳过并继续
 fn scan_all_libraries() -> Vec<InstalledGame> {
-    let libs = steam_libraries();
+    let libs = libraries();
     let mut games = Vec::new();
     for lib in libs {
         let Ok(entries) = std::fs::read_dir(&lib) else {

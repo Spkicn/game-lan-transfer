@@ -18,6 +18,7 @@ import type {
   Progress,
   RecvSummary,
   RoleSetup,
+  SteamLibrary,
   SendInfo,
 } from './state';
 
@@ -156,6 +157,27 @@ export function startSend(
   return invoke<SendInfo>('start_send', { peer, items, pairing, iface, platform });
 }
 
+/** 列出本机所有 Steam 库，接收端挑装到哪个盘 */
+export function steamLibraries(): Promise<SteamLibrary[]> {
+  if (MOCK) {
+    return mock([
+      {
+        label: 'D:\\SteamLibrary',
+        install_dir: 'D:\\SteamLibrary\\steamapps\\common',
+        claim_root: 'D:\\SteamLibrary\\steamapps',
+        free_bytes: 240 * 1024 ** 3,
+      },
+      {
+        label: 'C:\\Program Files (x86)\\Steam',
+        install_dir: 'C:\\Program Files (x86)\\Steam\\steamapps\\common',
+        claim_root: 'C:\\Program Files (x86)\\Steam\\steamapps',
+        free_bytes: 42 * 1024 ** 3,
+      },
+    ]);
+  }
+  return invoke<SteamLibrary[]>('steam_libraries');
+}
+
 /** 接收内容 */
 export function startRecv(
   peer: string,
@@ -165,6 +187,7 @@ export function startRecv(
   pairing: string | null,
   force: boolean,
   intoDestination: boolean,
+  claimRoot: string | null,
 ): Promise<RecvSummary> {
   if (MOCK) {
     return mock({
@@ -183,6 +206,7 @@ export function startRecv(
     pairing,
     force,
     intoDestination,
+    claimRoot,
   });
 }
 
@@ -242,11 +266,17 @@ export function onProgress(handler: (payload: Progress) => void): Promise<Unlist
 /** 订阅传入的传输请求 */
 export function onRequest(handler: (payload: IncomingEvent) => void): Promise<UnlistenFn> {
   if (MOCK) {
-    // 预览时用 window.__mockIncoming() 手动触发，5 秒后也会自动来一条
+    // 预览时用 window.__mockIncoming() 手动触发；地址栏带 ?incoming=1 打开会自动来一条
     (window as unknown as { __mockIncoming?: () => void }).__mockIncoming = () =>
       handler(mockRequest);
-    window.setTimeout(() => handler(mockRequest), 5000);
-    return Promise.resolve(() => undefined);
+    const timer = window.location.search.includes('incoming=1')
+      ? window.setTimeout(() => handler(mockRequest), 2500)
+      : null;
+    return Promise.resolve(() => {
+      if (timer !== null) {
+        window.clearTimeout(timer);
+      }
+    });
   }
   return listen<IncomingEvent>('transfer://request', (event) => {
     handler(event.payload);

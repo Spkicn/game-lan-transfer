@@ -54,7 +54,23 @@ export default function App() {
       .onProgress((progress) => dispatch({ type: 'progress', progress }))
       .then((off) => (alive ? offs.push(off) : off()));
     void api
-      .onRequest((incoming) => dispatch({ type: 'incoming', incoming }))
+      .onRequest((incoming) => {
+        dispatch({ type: 'incoming', incoming });
+        // 有人要往这台机器送东西，立刻切到传输页，别让接收方错过
+        dispatch({ type: 'stage', stage: 'transfer' });
+        void api
+          .steamLibraries()
+          .then((libraries) => {
+            dispatch({ type: 'steam-libraries', libraries });
+            const first = libraries[0];
+            // Steam 游戏默认装到第一个库，用户想换再换
+            if (incoming.platform === 'steam' && first) {
+              dispatch({ type: 'incoming-dest', value: first.install_dir });
+              dispatch({ type: 'dest-claim-root', value: first.claim_root });
+            }
+          })
+          .catch(() => undefined);
+      })
       .then((off) => (alive ? offs.push(off) : off()));
     return () => {
       alive = false;
@@ -466,6 +482,21 @@ function PickStage({
     ? state.cwd.replace(/[\\/][^\\/]*$/, '')
     : null;
 
+  // 接收端不选内容，只等着发送端选好之后发来请求
+  if ((state.network?.link_role ?? null) === 'receiver') {
+    return (
+      <section className="flex min-h-[320px] min-w-0 flex-col items-center justify-center gap-3 border border-panel-edge bg-panel-face px-4 py-10 text-center">
+        <Lamp state="ready" />
+        <p className="text-[15px]">
+          {state.peer ? `已接上 ${state.peer.name}，等它选好内容发过来` : '接上对端之后在这里等'}
+        </p>
+        <p className="min-w-0 break-words text-[13px] text-ink-dim">
+          这是一台接收端，不用选内容：发送端选好之后这边会跳出请求，你选好放到哪里、点同意就行
+        </p>
+      </section>
+    );
+  }
+
   return (
     <div className="grid min-w-0 gap-6 md:grid-cols-[1fr_1fr]">
       <section className="min-w-0 border border-panel-edge bg-panel-face">
@@ -760,6 +791,19 @@ function IncomingPanel({
   pairing: string | null;
 }) {
   const [space, setSpace] = useState<string>('');
+  const isSteamGame = incoming.platform === 'steam';
+  const destParent = state.destCwd ? state.destCwd.replace(/[\\/][^\\/]*$/, '') : null;
+
+  // 进目录即选定，用户不需要再点一次确认
+  const browseDest = (path: string | null) =>
+    run(async () => {
+      const entries = await api.listLocal(path);
+      dispatch({ type: 'dest-cwd', value: path });
+      dispatch({ type: 'dest-entries', entries });
+      if (path) {
+        dispatch({ type: 'incoming-dest', value: path });
+      }
+    });
 
   // 目标目录一变就查一次可用空间，够不够在同意之前就说清楚
   useEffect(() => {
@@ -808,56 +852,144 @@ function IncomingPanel({
           />
         ))}
       </ul>
-      <div className="flex flex-wrap items-center gap-3 border-t border-panel-edge px-4 py-3">
-        <Input
-          value={state.incomingDest}
-          aria-label="目标文件夹"
-          onChange={(event) => dispatch({ type: 'incoming-dest', value: event.target.value })}
-          placeholder="目标文件夹，例如 D:\\Games"
-          className="max-w-md"
-        />
-        <Button
-          size="sm"
-          disabled={state.busy || state.incomingDest.trim().length === 0}
-          onClick={() =>
-            void run(async () => {
-              const dest = state.incomingDest.trim();
-              if (!dest) {
-                throw new Error('先填目标文件夹');
-              }
-              await api.respondRequest(incoming.id, true, dest);
-              dispatch({ type: 'incoming', incoming: null });
-              dispatch({ type: 'transfer-plan', role: 'receive', items: incoming.items });
-              dispatch({ type: 'running', running: true });
-              dispatch({ type: 'progress', progress: null });
-              dispatch({ type: 'notice', message: '已同意，开始搬运' });
-              const peer = incoming.from;
-              const summary = await api.startRecv(peer, incoming.want, dest, incoming.platform, pairing, true, true);
-              dispatch({ type: 'finished', summary });
-              dispatch({ type: 'notice', message: null });
-            })
-          }
-          variant="primary"
-        >
-          <Check className="size-3.5" /> 同意传输
-        </Button>
-        <Button
-          size="sm"
-          variant="quiet"
-          disabled={state.busy}
-          onClick={() =>
-            void run(async () => {
-              await api.respondRequest(incoming.id, false, null);
-              dispatch({ type: 'incoming', incoming: null });
-              dispatch({ type: 'notice', message: '已拒绝这次传输' });
-            })
-          }
-        >
-          <X className="size-3.5" /> 拒绝
-        </Button>
-        <span className="min-w-0 flex-1 break-all text-[12px] text-ink-dim">
-          {space || `同意之前不会落盘${iface ? ` · 本机 ${iface}` : ''}`}
-        </span>
+      <div className="flex flex-col gap-3 border-t border-panel-edge px-4 py-3">
+        <div className="flex min-w-0 flex-wrap items-center gap-3">
+          <span className="label shrink-0">放到哪里</span>
+          <Input
+            value={state.incomingDest}
+            aria-label="目标文件夹"
+            onChange={(event) => dispatch({ type: 'incoming-dest', value: event.target.value })}
+            placeholder="目标文件夹，例如 D:\\Games"
+            className="max-w-lg"
+          />
+          <span className="min-w-0 flex-1 break-all text-[12px] text-ink-dim">
+            {space || `同意之前不会落盘${iface ? ` · 本机 ${iface}` : ''}`}
+          </span>
+        </div>
+
+        {isSteamGame && state.steamLibraries.length > 0 ? (
+          <div className="flex min-w-0 flex-col gap-1">
+            <span className="label">Steam 游戏装到哪个库</span>
+            <ul className="border border-panel-edge">
+              {state.steamLibraries.map((library) => (
+                <RailRow
+                  key={library.claim_root}
+                  selected={state.incomingDest === library.install_dir}
+                  onSelect={() => {
+                    dispatch({ type: 'incoming-dest', value: library.install_dir });
+                    dispatch({ type: 'dest-claim-root', value: library.claim_root });
+                  }}
+                  selectLabel={`装到 ${library.label}`}
+                  title={library.label}
+                  meta={library.install_dir}
+                  reading={
+                    library.free_bytes > 0 ? `可用 ${formatBytes(library.free_bytes)}` : '空间未知'
+                  }
+                />
+              ))}
+            </ul>
+            <p className="min-w-0 break-words text-[12px] text-ink-dim">
+              选好之后游戏装进这个库，清单也写在这个库里，Steam 直接能认
+            </p>
+          </div>
+        ) : (
+          <div className="flex min-w-0 flex-col gap-1">
+            <span className="label">挑一个文件夹</span>
+            <div className="flex min-w-0 items-center gap-2">
+              <Button
+                size="sm"
+                variant="quiet"
+                disabled={!destParent || state.busy}
+                onClick={() => void browseDest(destParent)}
+              >
+                <ArrowUp className="size-3.5" /> 上层
+              </Button>
+              <span className="reading min-w-0 flex-1 truncate text-[12px] text-ink-faint">
+                {state.destCwd ?? '点右边「列出」从盘符开始'}
+              </span>
+              <Button
+                size="sm"
+                variant="quiet"
+                disabled={state.busy}
+                onClick={() => void browseDest(state.destCwd)}
+              >
+                <RefreshCw className="size-3.5" /> 列出
+              </Button>
+            </div>
+            <ul className="max-h-[22vh] overflow-y-auto border border-panel-edge">
+              {state.destEntries
+                .filter((entry) => entry.is_dir)
+                .map((entry) => (
+                  <RailRow
+                    key={entry.path}
+                    selected={state.incomingDest === entry.path}
+                    onActivate={() => void browseDest(entry.path)}
+                    onSelect={() => dispatch({ type: 'incoming-dest', value: entry.path })}
+                    selectLabel={`选 ${entry.name}`}
+                    title={`${entry.name}\\`}
+                    meta={entry.path}
+                    reading="文件夹"
+                  />
+                ))}
+              {state.destEntries.length === 0 ? (
+                <li className="px-4 py-3 text-[13px] text-ink-dim">
+                  点「列出」从盘符开始挑，点文件夹进去，勾上就是选定
+                </li>
+              ) : null}
+            </ul>
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center gap-3">
+          <Button
+            size="sm"
+            disabled={state.busy || state.incomingDest.trim().length === 0}
+            onClick={() =>
+              void run(async () => {
+                const dest = state.incomingDest.trim();
+                if (!dest) {
+                  throw new Error('先选好放到哪里');
+                }
+                await api.respondRequest(incoming.id, true, dest);
+                dispatch({ type: 'incoming', incoming: null });
+                dispatch({ type: 'transfer-plan', role: 'receive', items: incoming.items });
+                dispatch({ type: 'running', running: true });
+                dispatch({ type: 'progress', progress: null });
+                dispatch({ type: 'notice', message: '已同意，开始搬运' });
+                const peer = incoming.from;
+                const summary = await api.startRecv(
+                  peer,
+                  incoming.want,
+                  dest,
+                  incoming.platform,
+                  pairing,
+                  true,
+                  true,
+                  state.destClaimRoot,
+                );
+                dispatch({ type: 'finished', summary });
+                dispatch({ type: 'notice', message: null });
+              })
+            }
+            variant="primary"
+          >
+            <Check className="size-3.5" /> 同意传输
+          </Button>
+          <Button
+            size="sm"
+            variant="quiet"
+            disabled={state.busy}
+            onClick={() =>
+              void run(async () => {
+                await api.respondRequest(incoming.id, false, null);
+                dispatch({ type: 'incoming', incoming: null });
+                dispatch({ type: 'notice', message: '已拒绝这次传输' });
+              })
+            }
+          >
+            <X className="size-3.5" /> 拒绝
+          </Button>
+        </div>
       </div>
     </section>
   );
@@ -915,13 +1047,16 @@ function NextAction({
     );
   }
   if (state.stage === 'pick') {
+    const receiver = (state.network?.link_role ?? null) === 'receiver';
     return (
       <>
-        <Lamp state={state.picked.length > 0 ? 'ready' : 'idle'} />
+        <Lamp state={receiver || state.picked.length > 0 ? 'ready' : 'idle'} />
         <span>
-          {state.picked.length > 0
-            ? `已选 ${state.picked.length} 项，${formatBytes(pickedBytes(state))}`
-            : '选要搬的游戏，或切到「文件夹」挑任意文件'}
+          {receiver
+            ? '这是一台接收端，等发送端选好内容发过来'
+            : state.picked.length > 0
+              ? `已选 ${state.picked.length} 项，${formatBytes(pickedBytes(state))}`
+              : '选要搬的游戏，或切到「文件夹」挑任意文件'}
         </span>
         <Button size="sm" variant="quiet" className="ml-auto" onClick={() => dispatch({ type: 'stage', stage: 'connect' })}>
           回到连接

@@ -156,6 +156,38 @@ describe('三阶段状态机', () => {
     expect(pickedPlatform(state)).toBeNull();
   });
 
+  it('接收端挑落盘位置的状态各自独立', () => {
+    let state = reduce(initialState, {
+      type: 'steam-libraries',
+      libraries: [
+        {
+          label: 'D:\\SteamLibrary',
+          install_dir: 'D:\\SteamLibrary\\steamapps\\common',
+          claim_root: 'D:\\SteamLibrary\\steamapps',
+          free_bytes: 1024,
+        },
+      ],
+    });
+    expect(state.steamLibraries).toHaveLength(1);
+    state = reduce(state, {
+      type: 'incoming-dest',
+      value: 'D:\\SteamLibrary\\steamapps\\common',
+    });
+    state = reduce(state, {
+      type: 'dest-claim-root',
+      value: 'D:\\SteamLibrary\\steamapps',
+    });
+    state = reduce(state, { type: 'dest-cwd', value: 'D:\\Games' });
+    state = reduce(state, {
+      type: 'dest-entries',
+      entries: [{ name: 'saves', path: 'D:\\Games\\saves', is_dir: true, bytes: 0 }],
+    });
+    expect(state.destClaimRoot).toBe('D:\\SteamLibrary\\steamapps');
+    expect(state.destCwd).toBe('D:\\Games');
+    expect(state.destEntries).toHaveLength(1);
+    expect(state.incomingDest).toBe('D:\\SteamLibrary\\steamapps\\common');
+  });
+
   it('对端同意后传输仍在进行，被拒才算结束', () => {
     const approved = reduce(initialState, {
       type: 'send-result',
@@ -170,7 +202,12 @@ describe('三阶段状态机', () => {
   });
 
   it('发送方按进度判断完成，不依赖接收结果', () => {
-    let state = reduce(initialState, { type: 'running', running: true });
+    let state = reduce(initialState, {
+      type: 'transfer-plan',
+      role: 'send',
+      items: [{ name: 'demo', bytes: 4096 }],
+    });
+    state = reduce(state, { type: 'running', running: true });
     expect(transferComplete(state)).toBe(false);
     state = reduce(state, {
       type: 'progress',
@@ -186,8 +223,22 @@ describe('三阶段状态机', () => {
     expect(rowState(state)).toBe('done');
   });
 
-  it('总量为零不当作完成', () => {
+  it('还没开始这一单时，进度事件不会把界面说成已完成', () => {
     const state = reduce(initialState, {
+      type: 'progress',
+      progress: { bytes_done: 4096, bytes_total: 4096, bytes_per_sec: 512, fraction: 1 },
+    });
+    expect(state.role).toBeNull();
+    expect(transferComplete(state)).toBe(false);
+  });
+
+  it('总量为零不当作完成', () => {
+    let state = reduce(initialState, {
+      type: 'transfer-plan',
+      role: 'receive',
+      items: [{ name: 'demo', bytes: 0 }],
+    });
+    state = reduce(state, {
       type: 'progress',
       progress: { bytes_done: 0, bytes_total: 0, bytes_per_sec: 0, fraction: 0 },
     });

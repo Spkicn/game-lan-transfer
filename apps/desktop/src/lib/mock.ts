@@ -21,13 +21,13 @@ export const mockNetwork: NetworkStatus = {
     },
     { name: 'WLAN', description: 'Wi-Fi 6 AX201', is_physical: false, ip: null },
   ],
-  address: null,
+  address: '192.168.88.2',
   nic_name: '以太网',
   is_physical: true,
-  direct_link: false,
-  link_role: null,
+  direct_link: true,
+  link_role: 'receiver',
   address_problem: null,
-  hint: '两台机器直连时，选这台是发送端还是接收端，软件会自动配好地址',
+  hint: '直连已就绪，插上网线就能与对端互通',
 };
 
 /** 假对端 */

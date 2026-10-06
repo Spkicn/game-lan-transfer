@@ -131,6 +131,22 @@ export interface TransferItem {
   source?: string;
 }
 
+/** 接收端可选的 Steam 库 */
+export interface SteamLibrary {
+  label: string;
+  install_dir: string;
+  claim_root: string;
+  free_bytes: number;
+}
+
+/** 接收端在选择落盘位置 */
+export interface DestPick {
+  /** 选中的目标目录 */
+  dir: string;
+  /** 有 Steam 库时，认领文件要写到库目录而不是默认位置 */
+  claimRoot: string | null;
+}
+
 /** 界面状态 */
 export interface AppState {
   stage: Stage;
@@ -148,6 +164,14 @@ export interface AppState {
   listening: ListenInfo | null;
   incoming: IncomingEvent | null;
   incomingDest: string;
+  /** 本机上的 Steam 库，接收端挑盘时用 */
+  steamLibraries: SteamLibrary[];
+  /** 接收端为目标目录选定的认领根，Steam 库时不是空 */
+  destClaimRoot: string | null;
+  /** 接收端浏览落盘位置时的当前目录 */
+  destCwd: string | null;
+  /** 接收端浏览落盘位置时的目录内容 */
+  destEntries: LocalEntry[];
   games: GameEntry[];
   source: PickSource;
   picked: string[];
@@ -177,6 +201,10 @@ export const initialState: AppState = {
   listening: null,
   incoming: null,
   incomingDest: '',
+  steamLibraries: [],
+  destClaimRoot: null,
+  destCwd: null,
+  destEntries: [],
   games: [],
   source: 'games',
   picked: [],
@@ -206,6 +234,14 @@ export type Action =
   | { type: 'listening'; listening: ListenInfo | null }
   | { type: 'incoming'; incoming: IncomingEvent | null }
   | { type: 'incoming-dest'; value: string }
+  | { type: 'steam-libraries'; libraries: SteamLibrary[] }
+  | { type: 'dest-claim-root'; value: string | null }
+  | { type: 'dest-cwd'; value: string | null }
+  | { type: 'dest-entries'; entries: LocalEntry[] }
+  | { type: 'steam-libraries'; libraries: SteamLibrary[] }
+  | { type: 'dest-claim-root'; value: string | null }
+  | { type: 'dest-cwd'; value: string | null }
+  | { type: 'dest-entries'; entries: LocalEntry[] }
   | { type: 'games'; games: GameEntry[] }
   | { type: 'source'; source: PickSource }
   | { type: 'toggle-pick'; path: string }
@@ -250,6 +286,14 @@ export function reduce(state: AppState, action: Action): AppState {
       return { ...state, incoming: action.incoming };
     case 'incoming-dest':
       return { ...state, incomingDest: action.value };
+    case 'steam-libraries':
+      return { ...state, steamLibraries: action.libraries };
+    case 'dest-claim-root':
+      return { ...state, destClaimRoot: action.value };
+    case 'dest-cwd':
+      return { ...state, destCwd: action.value, busy: false };
+    case 'dest-entries':
+      return { ...state, destEntries: action.entries, busy: false };
     case 'games':
       return { ...state, games: action.games, busy: false };
     case 'source':
@@ -342,6 +386,10 @@ export function pickedItems(state: AppState): TransferItem[] {  return state.pic
 export function transferComplete(state: AppState): boolean {
   if (state.finished) {
     return true;
+  }
+  // 没有这一单就没有完成一说，避免缺省进度把界面说成已完成
+  if (state.role === null) {
+    return false;
   }
   const progress = state.progress;
   return progress !== null && progress.bytes_total > 0 && progress.bytes_done >= progress.bytes_total;

@@ -58,7 +58,7 @@ pub fn run_powershell(script: &str) -> Result<String> {
 /// PowerShell 无法启动或脚本以非零状态结束时返回 [`Error::Shell`]
 pub fn run_powershell_in(script: &str, args: &[&str]) -> Result<String> {
     let full = format!("[Console]::OutputEncoding=[Text.Encoding]::UTF8; {script}");
-    let output = std::process::Command::new("powershell")
+    let output = crate::shell::hidden_command("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", &full])
         .args(args)
         .output()
@@ -160,7 +160,7 @@ pub fn list_nics() -> Vec<Nic> {
                      | ForEach-Object { $_.IPAddress }) -join ','; \
                 '{0}|{1}|{2}' -f $n, $_.InterfaceDescription, $ips \
               }";
-    let output = std::process::Command::new("powershell")
+    let output = crate::shell::hidden_command("powershell")
         .args(["-NoProfile", "-Command", ps])
         .output();
     let Ok(out) = output else { return Vec::new() };

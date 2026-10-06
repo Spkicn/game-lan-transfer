@@ -239,6 +239,7 @@ export const mockRequest: IncomingEvent = {
   id: 1,
   from: '192.168.88.2',
   transfer_port: 27101,
+  pairing: '424242',
   sender_name: 'BAIUPC',
   total_bytes: 64 * 1024 ** 3,
   items: [

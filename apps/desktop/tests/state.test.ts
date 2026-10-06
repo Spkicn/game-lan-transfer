@@ -7,7 +7,7 @@ import {
   pickedBytes,
   pickedItems,
   pickedPlatform,
-  pullAddress,
+  pullPlan,
   reduce,
   rowState,
   transferComplete,
@@ -74,6 +74,7 @@ describe('三阶段状态机', () => {
         id: 7,
         from: '192.168.88.2',
         transfer_port: 27101,
+        pairing: '424242',
         sender_name: 'laptop',
         total_bytes: 2048,
         items: [{ name: 'demo', is_dir: true, bytes: 2048 }],
@@ -158,19 +159,23 @@ describe('三阶段状态机', () => {
     expect(pickedPlatform(state)).toBeNull();
   });
 
-  it('拉取地址用发送方的传输端口，不是请求连接的端口', () => {
-    expect(
-      pullAddress({
-        id: 1,
-        from: '192.168.88.1',
-        transfer_port: 27101,
-        sender_name: 'laptop',
-        total_bytes: 1024,
-        items: [{ name: 'demo', is_dir: true, bytes: 1024 }],
-        want: 'demo',
-        platform: 'steam',
-      }),
-    ).toBe('192.168.88.1:27101');
+  it('拉取要用发送方的传输端口与配对码，不能用本机设置', () => {
+    const plan = pullPlan({
+      id: 1,
+      from: '192.168.88.1',
+      transfer_port: 27101,
+      pairing: '424242',
+      sender_name: 'laptop',
+      total_bytes: 1024,
+      items: [{ name: 'demo', is_dir: true, bytes: 1024 }],
+      want: 'demo',
+      platform: 'steam',
+    });
+    expect(plan).toEqual({
+      peer: '192.168.88.1:27101',
+      pairing: '424242',
+      platform: 'steam',
+    });
   });
 
   it('接收端挑落盘位置的状态各自独立', () => {

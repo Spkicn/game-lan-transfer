@@ -90,6 +90,8 @@ export interface IncomingEvent {
   from: string;
   /** 发送方传输服务端口 */
   transfer_port: number;
+  /** 发送方这次会话用的配对码 */
+  pairing: string | null;
   sender_name: string;
   total_bytes: number;
   items: IncomingItem[];
@@ -404,6 +406,25 @@ export function transferComplete(state: AppState): boolean {
  */
 export function pullAddress(incoming: IncomingEvent): string {
   return `${incoming.from}:${incoming.transfer_port}`;
+}
+
+/** 接收方拉取需要的东西：发送方传输地址、这次会话的配对码、平台
+ *
+ * 配对码用请求里带过来的那个，本机设置里填的不是发送方要的
+ */
+export interface PullPlan {
+  peer: string;
+  pairing: string | null;
+  platform: string | null;
+}
+
+/** 组装接收方拉取所需参数 */
+export function pullPlan(incoming: IncomingEvent): PullPlan {
+  return {
+    peer: pullAddress(incoming),
+    pairing: incoming.pairing,
+    platform: incoming.platform,
+  };
 }
 
 /** 全选的都是同一个平台的游戏时才带上平台，用来决定认领文件写到哪 */

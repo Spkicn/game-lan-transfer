@@ -28,6 +28,7 @@ import {
   pickedItems,
   pickedPlatform,
   pullAddress,
+  pullPlan,
   reduce,
   rowState,
   transferComplete,
@@ -213,7 +214,7 @@ export default function App() {
           <PickStage state={state} dispatch={dispatch} run={run} iface={iface} pairing={pairing} />
         ) : null}
         {state.stage === 'transfer' ? (
-          <TransferStage state={state} dispatch={dispatch} run={run} iface={iface} pairing={pairing} />
+          <TransferStage state={state} dispatch={dispatch} run={run} iface={iface} />
         ) : null}
       </main>
 
@@ -658,13 +659,11 @@ function TransferStage({
   dispatch,
   run,
   iface,
-  pairing,
 }: {
   state: AppState;
   dispatch: Dispatch;
   run: Run;
   iface: string | null;
-  pairing: string | null;
 }) {
   const progress = state.progress;
   const incoming = state.incoming;
@@ -674,7 +673,7 @@ function TransferStage({
   return (
     <div className="flex flex-col gap-6">
       {incoming ? (
-        <IncomingPanel state={state} dispatch={dispatch} run={run} incoming={incoming} iface={iface} pairing={pairing} />
+        <IncomingPanel state={state} dispatch={dispatch} run={run} incoming={incoming} iface={iface} />
       ) : null}
 
       {state.listening && !incoming ? (
@@ -785,14 +784,12 @@ function IncomingPanel({
   run,
   incoming,
   iface,
-  pairing,
 }: {
   state: AppState;
   dispatch: Dispatch;
   run: Run;
   incoming: IncomingEvent;
   iface: string | null;
-  pairing: string | null;
 }) {
   const [space, setSpace] = useState<string>('');
   const isSteamGame = incoming.platform === 'steam';
@@ -996,13 +993,13 @@ function IncomingPanel({
                 dispatch({ type: 'running', running: true });
                 dispatch({ type: 'progress', progress: null });
                 dispatch({ type: 'notice', message: '已同意，开始搬运' });
-                const peer = pullAddress(incoming);
+                const plan = pullPlan(incoming);
                 const summary = await api.startRecv(
-                  peer,
+                  plan.peer,
                   incoming.want,
                   dest,
-                  incoming.platform,
-                  pairing,
+                  plan.platform,
+                  plan.pairing,
                   true,
                   true,
                   state.destClaimRoot,

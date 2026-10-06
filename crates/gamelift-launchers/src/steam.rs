@@ -50,7 +50,7 @@ pub fn steam_root() -> Option<PathBuf> {
 
 /// 从注册表读 SteamPath，未安装或无权限时返回 None
 fn steam_path_from_registry() -> Option<PathBuf> {
-    let output = std::process::Command::new("reg")
+    let output = gamelift_core::shell::hidden_command("reg")
         .args([
             "query",
             r"HKLM\SOFTWARE\WOW6432Node\Valve\Steam",

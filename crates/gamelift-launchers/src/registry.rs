@@ -69,7 +69,7 @@ impl RegistryRead for MapRegistry {
 
 /// 调用 `reg query` 并把输出解析成键到值的映射
 fn query(key: &str) -> Option<BTreeMap<String, ValueMap>> {
-    let output = std::process::Command::new("reg")
+    let output = gamelift_core::shell::hidden_command("reg")
         .args(["query", key, "/s"])
         .output()
         .ok()?;

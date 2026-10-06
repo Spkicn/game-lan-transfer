@@ -27,7 +27,7 @@ pub fn serve(path: &Path) -> Result<()> {
         "Remove-SmbShare -Name {SHARE_NAME} -Force -ErrorAction SilentlyContinue; \
          New-SmbShare -Name {SHARE_NAME} -Path '{safe}' -ReadAccess Everyone -ErrorAction Stop"
     );
-    let out = std::process::Command::new("powershell")
+    let out = crate::shell::hidden_command("powershell")
         .args(["-NoProfile", "-Command", &script])
         .output()
         .map_err(|e| Error::Shell(e.to_string()))?;
@@ -46,7 +46,7 @@ pub fn serve(path: &Path) -> Result<()> {
 /// [`Error::Shell`]：PowerShell 失败，常见于未提权
 pub fn stop_serve() -> Result<()> {
     let script = format!("Remove-SmbShare -Name {SHARE_NAME} -Force -ErrorAction SilentlyContinue");
-    let out = std::process::Command::new("powershell")
+    let out = crate::shell::hidden_command("powershell")
         .args(["-NoProfile", "-Command", &script])
         .output()
         .map_err(|e| Error::Shell(e.to_string()))?;
@@ -92,7 +92,7 @@ pub fn pull(
         return Err(Error::Io(format!("无法创建目标目录: {e}")));
     }
     let src = format!(r"\\{peer}\{SHARE_NAME}\{remote_relative}");
-    let out = std::process::Command::new("robocopy")
+    let out = crate::shell::hidden_command("robocopy")
         .args([
             &src,
             &dest.display().to_string(),

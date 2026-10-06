@@ -196,7 +196,7 @@ export type Action =
   | { type: 'error'; message: string | null }
   | { type: 'notice'; message: string | null }
   | { type: 'network'; network: NetworkStatus | null }
-  | { type: 'elevated'; value: boolean }
+  | { type: 'elevated'; value: boolean | null }
   | { type: 'pending-role'; role: LinkRole | null }
   | { type: 'peers'; peers: PeerEntry[] }
   | { type: 'peer'; peer: PeerEntry | null }

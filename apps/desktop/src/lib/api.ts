@@ -78,12 +78,12 @@ export function resetLink(): Promise<void> {
   return invoke<void>('reset_link');
 }
 
-/** 当前是否以管理员身份运行 */
-export function elevationStatus(): Promise<boolean> {
+/** 当前是否以管理员身份运行，探测不出来时为 null */
+export function elevationStatus(): Promise<boolean | null> {
   if (MOCK) {
     return mock(true);
   }
-  return invoke<boolean>('elevation_status');
+  return invoke<boolean | null>('elevation_status');
 }
 
 /** 请求以管理员身份重启本程序，可带上待办角色 */

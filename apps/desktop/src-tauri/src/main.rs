@@ -1157,10 +1157,10 @@ fn main() {
     }
 }
 
-/// 当前是否以管理员身份运行，配置直连与还原都需要
+/// 当前是否以管理员身份运行，探测不出来时返回空
 #[tauri::command]
-fn elevation_status() -> bool {
-    link::is_elevated()
+fn elevation_status() -> Option<bool> {
+    link::elevation_state()
 }
 
 /// 请求以管理员身份重新启动本程序，UAC 确认后本窗口退出

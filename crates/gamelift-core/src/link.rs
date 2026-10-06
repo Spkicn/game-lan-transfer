@@ -117,15 +117,31 @@ pub fn friendly_shell_error(raw: &str) -> String {
     trimmed.chars().take(300).collect()
 }
 
+/// 提权探测脚本，必须写成一整行
+///
+/// 用续行拼接会在 `)` 与 `.IsInRole` 之间留下空格，PowerShell 会直接解析失败，
+/// 于是任何权限都被判成未提权
+const ELEVATION_PROBE: &str = "(([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))";
+
 /// 当前进程是否以管理员身份运行，结果缓存
+///
+/// 探测失败时返回 `None`，调用方不要据此拦截操作
+#[must_use]
+pub fn elevation_state() -> Option<bool> {
+    static STATE: std::sync::OnceLock<Option<bool>> = std::sync::OnceLock::new();
+    *STATE.get_or_init(|| {
+        run_powershell(ELEVATION_PROBE)
+            .ok()
+            .map(|text| text.trim().eq_ignore_ascii_case("true"))
+    })
+}
+
+/// 是否以管理员身份运行
+///
+/// 探测不出来时按已提权处理：真正的失败会带自己的原因冒出来，比误判拦下操作好
 #[must_use]
 pub fn is_elevated() -> bool {
-    static ELEVATED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ELEVATED.get_or_init(|| {
-        let script = "([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()) \
-                      .IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)";
-        run_powershell(script).is_ok_and(|text| text.trim().eq_ignore_ascii_case("true"))
-    })
+    elevation_state() != Some(false)
 }
 
 /// 提示用户以管理员身份重新启动本程序
@@ -457,6 +473,23 @@ mod tests {
         assert!(message.contains("找不到指定的接口"), "got {message}");
         assert!(!message.contains("FullyQualifiedErrorId"), "got {message}");
         assert!(message.len() <= 300);
+    }
+
+    #[test]
+    fn elevation_probe_script_stays_on_one_line() {
+        // 续行拼接会插入空格，PowerShell 解析失败后所有人都被判成未提权
+        assert!(ELEVATION_PROBE.contains(").IsInRole("), "{ELEVATION_PROBE}");
+        assert!(!ELEVATION_PROBE.contains(") ."), "{ELEVATION_PROBE}");
+        assert!(!ELEVATION_PROBE.contains('\n'), "{ELEVATION_PROBE}");
+    }
+
+    #[test]
+    fn elevation_probe_answers_on_this_machine() {
+        // 探测必须真的给出答案，取不到答案说明脚本本身有问题
+        assert!(
+            elevation_state().is_some(),
+            "提权探测没有返回结果，说明探测脚本执行失败"
+        );
     }
 
     #[test]

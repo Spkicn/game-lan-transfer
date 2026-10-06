@@ -77,29 +77,67 @@ fn steam_path_from_registry() -> Option<PathBuf> {
 /// 接收端挑「装到哪个盘」时用这个列表
 #[must_use]
 pub fn libraries() -> Vec<PathBuf> {
-    let Some(root) = steam_root() else {
-        return Vec::new();
-    };
-    let mut libs = vec![root.join("steamapps")];
-    let vdf_path = root.join("steamapps").join("libraryfolders.vdf");
-    if let Ok(text) = std::fs::read_to_string(&vdf_path) {
-        if let VdfValue::Obj(pairs) = vdf::parse(&text).unwrap_or(VdfValue::Obj(Vec::new())) {
-            for (_, entry) in pairs {
-                let Some(path) = entry
-                    .get("path")
-                    .and_then(VdfValue::as_str)
-                    .map(str::to_owned)
-                else {
-                    continue;
-                };
-                let apps = PathBuf::from(&path).join("steamapps");
-                if apps.is_dir() && !libs.contains(&apps) {
-                    libs.push(apps);
+    let mut libs: Vec<PathBuf> = Vec::new();
+    for root in steam_roots() {
+        let apps = root.join("steamapps");
+        if apps.is_dir() && !libs.contains(&apps) {
+            libs.push(apps.clone());
+        }
+        // 每个根下的 libraryfolders.vdf 都读一遍，把其它盘的库也加进来
+        if let Ok(text) = std::fs::read_to_string(apps.join("libraryfolders.vdf")) {
+            if let VdfValue::Obj(pairs) = vdf::parse(&text).unwrap_or(VdfValue::Obj(Vec::new())) {
+                for (_, entry) in pairs {
+                    let Some(path) = entry.get("path").and_then(VdfValue::as_str) else {
+                        continue;
+                    };
+                    let other = PathBuf::from(path).join("steamapps");
+                    if other.is_dir() && !libs.contains(&other) {
+                        libs.push(other);
+                    }
                 }
             }
         }
     }
     libs
+}
+
+/// 可能的 Steam 根目录：注册表优先，其次常见安装位置，最后各磁盘的常见目录
+fn steam_roots() -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if let Some(path) = steam_path_from_registry() {
+        roots.push(path);
+    }
+    for letter in drive_letters() {
+        for candidate in roots_for_drive(letter) {
+            if candidate.join("steamapps").is_dir() && !roots.contains(&candidate) {
+                roots.push(candidate);
+            }
+        }
+    }
+    roots
+}
+
+/// 本机可用的盘符
+fn drive_letters() -> Vec<char> {
+    ('C'..='Z')
+        .filter(|letter| PathBuf::from(format!("{letter}:\\")).is_dir())
+        .collect()
+}
+
+/// 某个磁盘上 Steam 常见的安装位置，库目录与安装目录都算
+#[must_use]
+fn roots_for_drive(letter: char) -> Vec<PathBuf> {
+    [
+        format!("{letter}:\\Steam"),
+        format!("{letter}:\\SteamLibrary"),
+        format!("{letter}:\\Program Files (x86)\\Steam"),
+        format!("{letter}:\\Program Files\\Steam"),
+        format!("{letter}:\\Games\\Steam"),
+        format!("{letter}:\\Games\\SteamLibrary"),
+    ]
+    .into_iter()
+    .map(PathBuf::from)
+    .collect()
 }
 
 /// 扫描所有库，某库或某清单读取失败时跳过并继续
@@ -154,6 +192,27 @@ fn parse_acf(text: &str, steamapps: &Path, appid: &str) -> Option<InstalledGame>
 #[allow(clippy::expect_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "需要本机装有 Steam，手动运行查看库列表"]
+    fn prints_local_steam_libraries() {
+        let libs = libraries();
+        println!("发现 {} 个 Steam 库: {libs:?}", libs.len());
+        assert!(!libs.is_empty(), "本机没扫到 Steam 库");
+    }
+
+    #[test]
+    fn candidate_roots_cover_common_install_layouts() {
+        // 库目录常常单独在一个盘上，只找 Program Files 会漏掉
+        let roots = roots_for_drive('D');
+        assert!(roots.iter().any(|path| path.ends_with("SteamLibrary")));
+        assert!(roots
+            .iter()
+            .any(|path| path.to_string_lossy().contains("Program Files (x86)")));
+        assert!(roots
+            .iter()
+            .all(|path| path.to_string_lossy().starts_with("D:")));
+    }
 
     #[test]
     fn parses_size_and_fingerprint() {

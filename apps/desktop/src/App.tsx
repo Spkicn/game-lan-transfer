@@ -594,6 +594,7 @@ function PickStage({
           <p className="reading mt-2 text-[22px]">{formatBytes(pickedBytes(state))}</p>
           <p className="text-[13px] text-ink-dim">
             共 {state.picked.length} 项 · 发给 {state.peer?.name ?? '未选择对端'}
+            {pickedPlatform(state) ? ` · ${pickedPlatform(state)}` : ''}
           </p>
         </div>
         <ul className="max-h-[32vh] overflow-y-auto border border-panel-edge">
@@ -805,6 +806,22 @@ function IncomingPanel({
       }
     });
 
+  // 找不到库时用户可能刚把盘添加为库，允许重扫一次
+  const refreshLibraries = () =>
+    run(async () => {
+      const libraries = await api.steamLibraries();
+      dispatch({ type: 'steam-libraries', libraries });
+      const first = libraries[0];
+      if (first && state.destClaimRoot === null) {
+        dispatch({ type: 'incoming-dest', value: first.install_dir });
+        dispatch({ type: 'dest-claim-root', value: first.claim_root });
+      }
+      dispatch({
+        type: 'notice',
+        message: libraries.length > 0 ? `找到 ${libraries.length} 个 Steam 库` : '仍然没找到 Steam 库',
+      });
+    });
+
   // 目标目录一变就查一次可用空间，够不够在同意之前就说清楚
   useEffect(() => {
     const dest = state.incomingDest.trim();
@@ -867,34 +884,52 @@ function IncomingPanel({
           </span>
         </div>
 
-        {isSteamGame && state.steamLibraries.length > 0 ? (
+        {isSteamGame ? (
           <div className="flex min-w-0 flex-col gap-1">
-            <span className="label">Steam 游戏装到哪个库</span>
-            <ul className="border border-panel-edge">
-              {state.steamLibraries.map((library) => (
-                <RailRow
-                  key={library.claim_root}
-                  selected={state.incomingDest === library.install_dir}
-                  onSelect={() => {
-                    dispatch({ type: 'incoming-dest', value: library.install_dir });
-                    dispatch({ type: 'dest-claim-root', value: library.claim_root });
-                  }}
-                  selectLabel={`装到 ${library.label}`}
-                  title={library.label}
-                  meta={library.install_dir}
-                  reading={
-                    library.free_bytes > 0 ? `可用 ${formatBytes(library.free_bytes)}` : '空间未知'
-                  }
-                />
-              ))}
-            </ul>
-            <p className="min-w-0 break-words text-[12px] text-ink-dim">
-              选好之后游戏装进这个库，清单也写在这个库里，Steam 直接能认
-            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="label">Steam 游戏装到哪个库</span>
+              <Button size="sm" variant="quiet" disabled={state.busy} onClick={() => void refreshLibraries()}>
+                <RefreshCw className="size-3.5" /> 重新检测
+              </Button>
+            </div>
+            {state.steamLibraries.length > 0 ? (
+              <>
+                <ul className="border border-panel-edge">
+                  {state.steamLibraries.map((library) => (
+                    <RailRow
+                      key={library.claim_root}
+                      selected={state.incomingDest === library.install_dir}
+                      onSelect={() => {
+                        dispatch({ type: 'incoming-dest', value: library.install_dir });
+                        dispatch({ type: 'dest-claim-root', value: library.claim_root });
+                      }}
+                      selectLabel={`装到 ${library.label}`}
+                      title={library.label}
+                      meta={library.install_dir}
+                      reading={
+                        library.free_bytes > 0 ? `可用 ${formatBytes(library.free_bytes)}` : '空间未知'
+                      }
+                    />
+                  ))}
+                </ul>
+                <p className="min-w-0 break-words text-[12px] text-ink-dim">
+                  选好之后游戏装进这个库，清单也写在这个库里，Steam 直接能认
+                </p>
+              </>
+            ) : (
+              <div className="flex min-w-0 flex-col gap-1 border border-lamp-standby px-3 py-2">
+                <span className="text-[13px] text-lamp-standby">这台机器上没找到 Steam 库</span>
+                <span className="min-w-0 break-words text-[12px] text-ink-dim">
+                  Steam 没装、装在很少见的位置，或者这个盘还没被 Steam 添加为库，都会这样。可以用下面的文件夹先挑一个位置；装完在 Steam 里把这个盘添加为库，Steam 就能认出它
+                </span>
+              </div>
+            )}
           </div>
-        ) : (
+        ) : null}
+
+        {isSteamGame && state.steamLibraries.length > 0 ? null : (
           <div className="flex min-w-0 flex-col gap-1">
-            <span className="label">挑一个文件夹</span>
+            <span className="label">{isSteamGame ? '或者自己指定一个文件夹' : '挑一个文件夹'}</span>
             <div className="flex min-w-0 items-center gap-2">
               <Button
                 size="sm"

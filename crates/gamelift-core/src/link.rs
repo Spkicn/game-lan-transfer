@@ -21,6 +21,89 @@ pub struct Nic {
     pub current_ipv4: Option<String>,
 }
 
+/// 执行一段 PowerShell，输出按 UTF-8 解，失败时报可读的原因
+///
+/// # Errors
+///
+/// PowerShell 无法启动或脚本以非零状态结束时返回 [`Error::Shell`]
+pub fn run_powershell(script: &str) -> Result<String> {
+    run_powershell_in(script, &[])
+}
+
+/// 执行一段 PowerShell，可追加参数
+///
+/// # Errors
+///
+/// PowerShell 无法启动或脚本以非零状态结束时返回 [`Error::Shell`]
+pub fn run_powershell_in(script: &str, args: &[&str]) -> Result<String> {
+    let full = format!("[Console]::OutputEncoding=[Text.Encoding]::UTF8; {script}");
+    let output = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &full])
+        .args(args)
+        .output()
+        .map_err(|err| Error::Shell(err.to_string()))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    if output.status.success() {
+        return Ok(stdout);
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let raw = if stderr.trim().is_empty() {
+        stdout
+    } else {
+        stderr.into_owned()
+    };
+    Err(Error::Shell(friendly_shell_error(&raw)))
+}
+
+/// 把 PowerShell 的异常输出压成一句能看懂的话
+///
+/// 未提权时 Windows 返回 `System Error 5`，异常正文后面还跟着 `CategoryInfo` 一类定位信息
+#[must_use]
+pub fn friendly_shell_error(raw: &str) -> String {
+    let lowered = raw.to_lowercase();
+    if lowered.contains("system error 5")
+        || lowered.contains("permissiondenied")
+        || lowered.contains("access is denied")
+        || raw.contains("拒绝访问")
+    {
+        return "需要管理员权限：关闭本窗口，右键 GameLift 选择「以管理员身份运行」后再试"
+            .to_owned();
+    }
+    let text = raw
+        .lines()
+        .map(str::trim)
+        .filter(|line| {
+            !line.is_empty()
+                && !line.starts_with('+')
+                && !line.starts_with('~')
+                && !line.starts_with("At line:")
+                && !line.starts_with("CategoryInfo")
+                && !line.starts_with("FullyQualifiedErrorId")
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return "PowerShell 执行失败".to_owned();
+    }
+    trimmed.chars().take(300).collect()
+}
+
+/// 当前进程是否以管理员身份运行，结果缓存
+#[must_use]
+pub fn is_elevated() -> bool {
+    static ELEVATED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ELEVATED.get_or_init(|| {
+        let script = "([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()) \
+                      .IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)";
+        run_powershell(script).is_ok_and(|text| text.trim().eq_ignore_ascii_case("true"))
+    })
+}
+
+/// 提示用户以管理员身份重新启动本程序
+pub const ELEVATION_HINT: &str =
+    "需要管理员权限：关闭本窗口，右键 GameLift 选择「以管理员身份运行」后再试";
+
 /// 罗列所有网口，单次 PowerShell 调用取齐名称、描述与 IP
 /// 输出编码显式设为 UTF-8，避免中文 Windows 控制台乱码
 #[must_use]
@@ -114,7 +197,7 @@ fn is_physical_ethernet(name: &str, description: &str) -> bool {
 /// # Errors
 ///
 /// - [`Error::NicNotFound`]：找不到物理以太网口
-/// - [`Error::Shell`]：PowerShell 执行失败，通常是未以管理员运行
+/// - [`Error::Shell`]：未以管理员运行，或 PowerShell 执行失败
 pub fn setup_direct_link(host_octet: u8) -> Result<String> {
     let Some(nic) = list_nics().into_iter().find(|n| n.is_physical) else {
         return Err(Error::NicNotFound);
@@ -125,20 +208,15 @@ pub fn setup_direct_link(host_octet: u8) -> Result<String> {
             return Ok(cur.clone());
         }
     }
+    if !is_elevated() {
+        return Err(Error::Shell(ELEVATION_HINT.to_owned()));
+    }
     let safe_name = nic.name.replace('\'', "''");
     let script = format!(
         "New-NetIPAddress -InterfaceAlias '{safe_name}' -IPAddress {ip} -PrefixLength 24 -ErrorAction Stop; \
          Set-NetConnectionProfile -InterfaceAlias '{safe_name}' -NetworkCategory Private -ErrorAction SilentlyContinue"
     );
-    let out = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-Command", &script])
-        .output()
-        .map_err(|e| Error::Shell(e.to_string()))?;
-    if !out.status.success() {
-        return Err(Error::Shell(
-            String::from_utf8_lossy(&out.stderr).trim().to_owned(),
-        ));
-    }
+    run_powershell(&script)?;
     Ok(ip)
 }
 
@@ -151,6 +229,9 @@ pub fn revert_direct_link(host_octet: u8) -> Result<()> {
     let ip = format!("{LINK_SUBNET_PREFIX}.{host_octet}");
     let mut last_err = String::new();
     let mut touched = 0;
+    if !is_elevated() {
+        return Err(Error::Shell(ELEVATION_HINT.to_owned()));
+    }
     for nic in list_nics() {
         if !nic.is_physical {
             continue;
@@ -161,13 +242,8 @@ pub fn revert_direct_link(host_octet: u8) -> Result<()> {
             "Remove-NetIPAddress -InterfaceAlias '{safe_name}' -IPAddress {ip} -Confirm:$false -ErrorAction SilentlyContinue; \
              Set-NetIPInterface -InterfaceAlias '{safe_name}' -Dhcp Enabled -ErrorAction SilentlyContinue"
         );
-        match std::process::Command::new("powershell")
-            .args(["-NoProfile", "-Command", &script])
-            .output()
-        {
-            Ok(o) if o.status.success() => {}
-            Ok(o) => last_err = String::from_utf8_lossy(&o.stderr).trim().into(),
-            Err(e) => last_err = e.to_string(),
+        if let Err(err) = run_powershell(&script) {
+            last_err = err.to_string();
         }
     }
     if touched == 0 {
@@ -266,6 +342,32 @@ mod tests {
             is_physical,
             current_ipv4: ip.map(str::to_owned),
         }
+    }
+
+    #[test]
+    fn permission_failure_becomes_an_actionable_hint() {
+        let raw = "New-NetIPAddress : 取值为“1”的参数无效。\r\n\
+                   + CategoryInfo          : PermissionDenied: (MSFT_NetIPAddress:ROOT/StandardCimv2/MSFT_NetIPAddress) [New-NetIPAddress], CimException\r\n\
+                   + FullyQualifiedErrorId : Windows System Error 5,New-NetIPAddress\r\n";
+        let message = friendly_shell_error(raw);
+        assert!(message.contains("管理员权限"), "got {message}");
+        assert!(!message.contains("CategoryInfo"), "got {message}");
+    }
+
+    #[test]
+    fn other_failures_keep_the_first_line_and_drop_noise() {
+        let raw = "Remove-NetIPAddress : 找不到指定的接口。\r\n\
+                   + CategoryInfo          : ObjectNotFound: (MSFT_NetIPAddress:ROOT/StandardCimv2/MSFT_NetIPAddress) [Remove-NetIPAddress], CimException\r\n\
+                   + FullyQualifiedErrorId : Windows System Error 1168,Remove-NetIPAddress\r\n";
+        let message = friendly_shell_error(raw);
+        assert!(message.contains("找不到指定的接口"), "got {message}");
+        assert!(!message.contains("FullyQualifiedErrorId"), "got {message}");
+        assert!(message.len() <= 300);
+    }
+
+    #[test]
+    fn empty_output_still_gives_a_message() {
+        assert_eq!(friendly_shell_error("  \r\n \r\n"), "PowerShell 执行失败");
     }
 
     #[test]

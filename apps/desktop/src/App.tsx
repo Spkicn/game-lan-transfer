@@ -11,6 +11,7 @@ import {
   HardDrive,
   PlugZap,
   RefreshCw,
+  ShieldAlert,
   X,
 } from 'lucide-react';
 
@@ -62,7 +63,7 @@ export default function App() {
     };
   }, []);
 
-  // 启动：读网络状态与默认目标目录
+  // 启动：读网络状态、权限状态与默认目标目录
   useEffect(() => {
     void (async () => {
       dispatch({ type: 'busy', busy: true });
@@ -70,6 +71,13 @@ export default function App() {
         dispatch({ type: 'network', network: await api.networkStatus() });
       } catch (error) {
         dispatch({ type: 'error', message: api.describeError(error) });
+      }
+    })();
+    void (async () => {
+      try {
+        dispatch({ type: 'elevated', value: await api.elevationStatus() });
+      } catch {
+        // 取不到权限状态时不动，点「配置直连」时后端仍会给出提示
       }
     })();
     void (async () => {
@@ -243,6 +251,26 @@ function ConnectStage({
           </Button>
         </div>
         <p className="text-[12px] text-ink-dim">{network?.hint ?? '正在读取网络'}</p>
+        {state.elevated === false ? (
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <span className="label text-lamp-standby">未提权</span>
+            <span className="min-w-0 break-words text-[12px] text-lamp-standby">
+              配置直连与还原要改网卡设置，需要管理员权限
+            </span>
+            <Button
+              size="sm"
+              disabled={state.busy}
+              onClick={() =>
+                void run(async () => {
+                  await api.relaunchElevated();
+                  dispatch({ type: 'notice', message: '已请求以管理员身份重启，确认 UAC 后本窗口会退出' });
+                })
+              }
+            >
+              <ShieldAlert className="size-3.5" /> 以管理员身份重启
+            </Button>
+          </div>
+        ) : null}
         <label className="flex items-center gap-3 text-[12px] text-ink-dim">
           <span className="label shrink-0">配对码</span>
           <Input

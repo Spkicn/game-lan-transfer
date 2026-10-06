@@ -1073,6 +1073,8 @@ fn main() {
             network_status,
             setup_link,
             revert_link,
+            elevation_status,
+            relaunch_elevated,
             list_local,
             start_listen,
             stop_listen,
@@ -1085,6 +1087,29 @@ fn main() {
         eprintln!("启动 GameLift 失败: {err}");
         std::process::exit(1);
     }
+}
+
+/// 当前是否以管理员身份运行，配置直连与还原都需要
+#[tauri::command]
+fn elevation_status() -> bool {
+    link::is_elevated()
+}
+
+/// 请求以管理员身份重新启动本程序，UAC 确认后本窗口退出
+///
+/// # Errors
+///
+/// 取不到自身路径或无法启动提权进程时返回说明
+#[tauri::command]
+fn relaunch_elevated(app: AppHandle) -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(io_text)?;
+    let script = format!(
+        "Start-Process -FilePath '{}' -Verb RunAs",
+        exe.display().to_string().replace('\'', "''")
+    );
+    link::run_powershell(&script).map_err(describe)?;
+    app.exit(0);
+    Ok(())
 }
 
 /// 解析本机地址，未给定时优先物理以太网口，其次任意有地址的网卡

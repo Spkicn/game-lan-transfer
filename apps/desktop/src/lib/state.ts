@@ -124,6 +124,8 @@ export interface AppState {
   error: string | null;
   notice: string | null;
   network: NetworkStatus | null;
+  /** 是否以管理员身份运行，配置直连需要 */
+  elevated: boolean | null;
   peers: PeerEntry[];
   peer: PeerEntry | null;
   pairing: string;
@@ -151,6 +153,7 @@ export const initialState: AppState = {
   error: null,
   notice: null,
   network: null,
+  elevated: null,
   peers: [],
   peer: null,
   pairing: '',
@@ -178,6 +181,7 @@ export type Action =
   | { type: 'error'; message: string | null }
   | { type: 'notice'; message: string | null }
   | { type: 'network'; network: NetworkStatus | null }
+  | { type: 'elevated'; value: boolean }
   | { type: 'peers'; peers: PeerEntry[] }
   | { type: 'peer'; peer: PeerEntry | null }
   | { type: 'pairing'; value: string }
@@ -212,6 +216,8 @@ export function reduce(state: AppState, action: Action): AppState {
       return { ...state, notice: action.message };
     case 'network':
       return { ...state, network: action.network, busy: false };
+    case 'elevated':
+      return { ...state, elevated: action.value };
     case 'peers':
       return { ...state, peers: action.peers, busy: false };
     case 'peer':

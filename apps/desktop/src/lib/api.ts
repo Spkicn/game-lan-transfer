@@ -69,6 +69,22 @@ export function revertLink(): Promise<void> {
   return invoke<void>('revert_link');
 }
 
+/** 当前是否以管理员身份运行 */
+export function elevationStatus(): Promise<boolean> {
+  if (MOCK) {
+    return mock(true);
+  }
+  return invoke<boolean>('elevation_status');
+}
+
+/** 请求以管理员身份重启本程序 */
+export function relaunchElevated(): Promise<void> {
+  if (MOCK) {
+    return mock(undefined);
+  }
+  return invoke<void>('relaunch_elevated');
+}
+
 /** 列出本机目录内容；不传路径时给出盘符 */
 export function listLocal(path: string | null): Promise<LocalEntry[]> {
   if (MOCK) {

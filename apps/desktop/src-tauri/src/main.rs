@@ -217,6 +217,45 @@ fn discover_peers(iface: Option<String>, seconds: u64) -> Result<Vec<PeerEntry>,
         .collect())
 }
 
+/// 常驻发现：循环收广播，把对端列表推给界面
+///
+/// 界面不再需要靠按按钮去搜，对端上线几秒内自己会出现
+///
+/// # Errors
+///
+/// 发现端口被占用或线程无法启动时返回说明
+fn spawn_peer_collector(app: AppHandle, ip: IpAddr, stop: Arc<AtomicBool>) -> Result<(), String> {
+    let socket = discovery::bind(ip, discovery::DISCOVERY_PORT).map_err(describe)?;
+    thread::Builder::new()
+        .name("gamelift-discover".to_owned())
+        .spawn(move || {
+            while !stop.load(Ordering::Relaxed) {
+                let found = discovery::collect(
+                    &socket,
+                    Duration::from_millis(1200),
+                    Some(local_instance()),
+                );
+                if let Ok(peers) = found {
+                    let list: Vec<PeerEntry> = peers.into_iter().map(peer_entry).collect();
+                    let _ = app.emit("transfer://peers", &list);
+                }
+            }
+        })
+        .map_err(|err| format!("启动发现线程失败: {err}"))?;
+    Ok(())
+}
+
+/// 广播里的对端转成界面用的结构
+fn peer_entry(peer: discovery::Peer) -> PeerEntry {
+    PeerEntry {
+        name: peer.name,
+        addr: peer.addr.to_string(),
+        session_port: peer.session_port,
+        platform: peer.platform,
+        free_bytes: peer.free_bytes,
+    }
+}
+
 /// 传输预检：取对端清单、目标盘空间与是否可差异传输
 ///
 /// # Errors
@@ -776,17 +815,18 @@ fn start_listen(
     spawn_announcer(ip, peer, Arc::clone(&announce))?;
 
     let target = SocketAddr::new(ip, session::REQUEST_PORT);
-    let (listener, poll, stop, warning) = match RequestListener::start(target, code.clone()) {
+    // 发现线程与请求轮询共用一个停止标志，收摊时一起停
+    let stop = Arc::new(AtomicBool::new(false));
+    let discovery = spawn_peer_collector(app.clone(), ip, Arc::clone(&stop));
+    let (listener, poll, warning) = match RequestListener::start(target, code.clone()) {
         Ok(listener) => {
             let listener = Arc::new(listener);
-            let stop = Arc::new(AtomicBool::new(false));
             let poll = spawn_request_poller(&app, Arc::clone(&listener), Arc::clone(&stop))?;
-            (Some(listener), Some(poll), stop, None)
+            (Some(listener), Some(poll), discovery.err())
         }
         Err(err) => (
             None,
             None,
-            Arc::new(AtomicBool::new(true)),
             Some(format!(
                 "{}；对端能看到本机，但暂时发不来传输请求",
                 describe(err)

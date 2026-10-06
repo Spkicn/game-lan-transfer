@@ -273,6 +273,17 @@ export function onProgress(handler: (payload: Progress) => void): Promise<Unlist
   });
 }
 
+/** 订阅常驻发现推来的对端列表 */
+export function onPeers(handler: (peers: PeerEntry[]) => void): Promise<UnlistenFn> {
+  if (MOCK) {
+    window.setTimeout(() => handler(mockPeers), 800);
+    return Promise.resolve(() => undefined);
+  }
+  return listen<PeerEntry[]>('transfer://peers', (event) => {
+    handler(event.payload);
+  });
+}
+
 /** 订阅传入的传输请求 */
 export function onRequest(handler: (payload: IncomingEvent) => void): Promise<UnlistenFn> {
   if (MOCK) {

@@ -59,6 +59,9 @@ export default function App() {
       .onProgress((progress) => dispatch({ type: 'progress', progress }))
       .then((off) => (alive ? offs.push(off) : off()));
     void api
+      .onPeers((peers) => dispatch({ type: 'peers', peers }))
+      .then((off) => (alive ? offs.push(off) : off()));
+    void api
       .onRequest((incoming) => {
         dispatch({ type: 'incoming', incoming });
         // 有人要往这台机器送东西，立刻切到传输页，别让接收方错过
@@ -145,15 +148,7 @@ export default function App() {
   const applyRole = useCallback(
     (role: LinkRole) =>
       void run(async () => {
-        // 没提权时先请一次管理员权限，重启后靠启动参数接着配，用户只确认一次 UAC
-        if (state.elevated === false) {
-          await api.relaunchElevated(role);
-          dispatch({
-            type: 'notice',
-            message: `正在请求管理员权限：确认 UAC 后窗口会重开，并自动配成${role === 'sender' ? '发送端' : '接收端'}`,
-          });
-          return;
-        }
+        // 没提权时不再自动重启，用户想配直连时自己点「以管理员身份重启」
         const setup = await api.configureRole(role);
         dispatch({
           type: 'notice',
@@ -163,8 +158,24 @@ export default function App() {
         });
         dispatch({ type: 'network', network: await api.networkStatus() });
       }),
-    [run, state.elevated],
+    [run],
   );
+
+  // 起手就把广播与请求端口挂上：对端上线几秒内自己出现，不用反复按
+  const listenedFor = useRef<string | null>(null);
+  useEffect(() => {
+    const iface = state.network?.address ?? null;
+    const pair = state.pairing.trim() || null;
+    const key = `${iface ?? ''}|${pair ?? ''}`;
+    if (!iface || listenedFor.current === key) {
+      return;
+    }
+    listenedFor.current = key;
+    void run(async () => {
+      const listening = await api.startListen(iface, pair);
+      dispatch({ type: 'listening', listening });
+    });
+  }, [state.network?.address, state.pairing, run]);
 
   // 提权重启后自动把上次选的角色配好
   useEffect(() => {
@@ -280,23 +291,24 @@ function ConnectStage({
 }) {
   const network = state.network;
   const peer = state.peer;
+  // 直连配置默认收起：能自动发现的场景不该先问角色
+  const [directSetup, setDirectSetup] = useState(false);
   const role = network?.link_role ?? null;
   const linkState: LampState = peer ? 'ready' : state.busy ? 'flow' : 'idle';
 
   const discover = () =>
     run(async () => {
-      const peers = await api.discoverPeers(iface, 3);
-      dispatch({ type: 'peers', peers });
-      if (peers.length > 0 && state.peer === null) {
-        dispatch({ type: 'peer', peer: peers[0] ?? null });
-      }
+      // 常驻发现已经在收广播，这里只保证广播与请求端口挂上，列表随后自己刷新
       const listening = await api.startListen(iface, state.pairing.trim() || null);
       dispatch({ type: 'listening', listening });
-      // 地址可能刚被改过，刷新一次免得界面拿着过期地址
       dispatch({ type: 'network', network: await api.networkStatus() });
-      if (peers.length === 0) {
-        dispatch({ type: 'notice', message: '没有发现对端，确认两台机器在同一网段，或让对方也打开本软件' });
-      }
+      dispatch({
+        type: 'notice',
+        message:
+          state.peers.length > 0
+            ? `看到 ${state.peers.length} 台对端`
+            : '正在寻找：对端打开软件后几秒内会出现，确认两台机器在同一网段',
+      });
     });
 
   return (
@@ -394,7 +406,7 @@ function ConnectStage({
       </Port>
       <LinkRail
         state={linkState}
-        caption={peer ? '跳线已接上' : state.busy ? '正在找对端' : '等待跳线'}
+        caption={peer ? '跳线已接上' : state.busy ? '正在重新寻找' : '等待跳线'}
       />
 
       <Port
@@ -417,7 +429,7 @@ function ConnectStage({
           <div className="flex flex-wrap gap-2">
             <Button size="sm" onClick={() => void discover()} disabled={state.busy}>
               <RefreshCw className="size-3.5" />
-              {state.busy ? '正在找' : '找对端'}
+              {state.busy ? '正在找' : '重新寻找'}
             </Button>
           </div>
         )}
@@ -443,7 +455,19 @@ function ConnectStage({
         ) : null}
       </Port>
       </div>
-      {role === null ? <RoleBand state={state} applyRole={applyRole} /> : null}
+      {role === null ? (
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <Button size="sm" variant="quiet" onClick={() => setDirectSetup(true)}>
+            <PlugZap className="size-3.5" /> 两台机器用网线直连？点这里配角色
+          </Button>
+          <span className="min-w-0 flex-1 text-[12px] text-ink-dim">
+            已经连在同一个路由器或局域网里的话，不用配，等对端自己出现即可
+          </span>
+        </div>
+      ) : null}
+      {role === null && directSetup ? (
+        <RoleBand state={state} applyRole={applyRole} />
+      ) : null}
     </div>
   );
 }
@@ -1207,7 +1231,7 @@ function NextAction({
     return (
       <>
         <Lamp state={connected(state) ? 'ready' : 'idle'} />
-        <span>{connected(state) ? `已接上 ${state.peer?.name}` : '把跳线接到对端：点「找对端」'}</span>
+        <span>{connected(state) ? `已接上 ${state.peer?.name}` : '把跳线接到对端：点「重新寻找」'}</span>
         <Button
           size="sm"
           variant="primary"

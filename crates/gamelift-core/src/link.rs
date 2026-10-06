@@ -90,6 +90,13 @@ pub fn friendly_shell_error(raw: &str) -> String {
         return "需要管理员权限：关闭本窗口，右键 GameLift 选择「以管理员身份运行」后再试"
             .to_owned();
     }
+    if lowered.contains("cancelled by the user")
+        || lowered.contains("canceled by the user")
+        || raw.contains("用户取消")
+        || raw.contains("已被用户取消")
+    {
+        return "管理员权限请求被取消：想改网络设置时再点一次即可".to_owned();
+    }
     let text = raw
         .lines()
         .map(str::trim)
@@ -450,6 +457,14 @@ mod tests {
         assert!(message.contains("找不到指定的接口"), "got {message}");
         assert!(!message.contains("FullyQualifiedErrorId"), "got {message}");
         assert!(message.len() <= 300);
+    }
+
+    #[test]
+    fn cancelled_elevation_is_not_reported_as_a_failure() {
+        let raw = "Start-Process : 此操作已被用户取消。\r\n\
+                   + CategoryInfo          : InvalidOperation: (:) [Start-Process], InvalidOperationException\r\n";
+        let message = friendly_shell_error(raw);
+        assert!(message.contains("被取消"), "got {message}");
     }
 
     #[test]

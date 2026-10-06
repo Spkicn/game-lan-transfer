@@ -86,12 +86,20 @@ export function elevationStatus(): Promise<boolean> {
   return invoke<boolean>('elevation_status');
 }
 
-/** 请求以管理员身份重启本程序 */
-export function relaunchElevated(): Promise<void> {
+/** 请求以管理员身份重启本程序，可带上待办角色 */
+export function relaunchElevated(role: LinkRole | null): Promise<void> {
   if (MOCK) {
     return mock(undefined);
   }
-  return invoke<void>('relaunch_elevated');
+  return invoke<void>('relaunch_elevated', { role });
+}
+
+/** 提权重启时带过来的待办角色 */
+export function startupRole(): Promise<string | null> {
+  if (MOCK) {
+    return mock(null);
+  }
+  return invoke<string | null>('startup_role');
 }
 
 /** 列出本机目录内容；不传路径时给出盘符 */

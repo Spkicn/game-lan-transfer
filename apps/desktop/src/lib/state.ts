@@ -138,6 +138,8 @@ export interface AppState {
   network: NetworkStatus | null;
   /** 是否以管理员身份运行，配置直连需要 */
   elevated: boolean | null;
+  /** 提权重启前选好的角色，重启后自动配好 */
+  pendingRole: LinkRole | null;
   peers: PeerEntry[];
   peer: PeerEntry | null;
   pairing: string;
@@ -166,6 +168,7 @@ export const initialState: AppState = {
   notice: null,
   network: null,
   elevated: null,
+  pendingRole: null,
   peers: [],
   peer: null,
   pairing: '',
@@ -194,6 +197,7 @@ export type Action =
   | { type: 'notice'; message: string | null }
   | { type: 'network'; network: NetworkStatus | null }
   | { type: 'elevated'; value: boolean }
+  | { type: 'pending-role'; role: LinkRole | null }
   | { type: 'peers'; peers: PeerEntry[] }
   | { type: 'peer'; peer: PeerEntry | null }
   | { type: 'pairing'; value: string }
@@ -230,6 +234,8 @@ export function reduce(state: AppState, action: Action): AppState {
       return { ...state, network: action.network, busy: false };
     case 'elevated':
       return { ...state, elevated: action.value };
+    case 'pending-role':
+      return { ...state, pendingRole: action.role };
     case 'peers':
       return { ...state, peers: action.peers, busy: false };
     case 'peer':

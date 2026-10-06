@@ -91,6 +91,16 @@ export default function App() {
         // 没有默认目录时留空，由用户自己填
       }
     })();
+    void (async () => {
+      try {
+        const role = await api.startupRole();
+        if (role === 'sender' || role === 'receiver') {
+          dispatch({ type: 'pending-role', role });
+        }
+      } catch {
+        // 没有待办角色就什么都不做
+      }
+    })();
   }, []);
 
   const run = useCallback(async (work: () => Promise<void>) => {
@@ -103,6 +113,40 @@ export default function App() {
       dispatch({ type: 'busy', busy: false });
     }
   }, []);
+
+  const applyRole = useCallback(
+    (role: LinkRole) =>
+      void run(async () => {
+        // 没提权时先请一次管理员权限，重启后靠启动参数接着配，用户只确认一次 UAC
+        if (state.elevated === false) {
+          await api.relaunchElevated(role);
+          dispatch({
+            type: 'notice',
+            message: `正在请求管理员权限：确认 UAC 后窗口会重开，并自动配成${role === 'sender' ? '发送端' : '接收端'}`,
+          });
+          return;
+        }
+        const setup = await api.configureRole(role);
+        dispatch({
+          type: 'notice',
+          message: setup.already
+            ? `早就配好了：${role === 'sender' ? '发送端' : '接收端'} ${setup.ip}`
+            : `已配成${role === 'sender' ? '发送端' : '接收端'} ${setup.ip}`,
+        });
+        dispatch({ type: 'network', network: await api.networkStatus() });
+      }),
+    [run, state.elevated],
+  );
+
+  // 提权重启后自动把上次选的角色配好
+  useEffect(() => {
+    const role = state.pendingRole;
+    if (!role || state.elevated !== true) {
+      return;
+    }
+    dispatch({ type: 'pending-role', role: null });
+    applyRole(role);
+  }, [state.pendingRole, state.elevated, applyRole]);
 
   const iface = state.network?.address ?? null;
   const pairing = state.pairing.trim().length > 0 ? state.pairing.trim() : null;
@@ -145,7 +189,9 @@ export default function App() {
       </header>
 
       <main className="min-h-0 min-w-0 overflow-x-hidden overflow-y-auto px-5 py-5">
-        {state.stage === 'connect' ? <ConnectStage state={state} dispatch={dispatch} run={run} iface={iface} /> : null}
+        {state.stage === 'connect' ? (
+          <ConnectStage state={state} dispatch={dispatch} run={run} iface={iface} applyRole={applyRole} />
+        ) : null}
         {state.stage === 'pick' ? (
           <PickStage state={state} dispatch={dispatch} run={run} iface={iface} pairing={pairing} />
         ) : null}
@@ -170,11 +216,13 @@ function ConnectStage({
   dispatch,
   run,
   iface,
+  applyRole,
 }: {
   state: AppState;
   dispatch: Dispatch;
   run: Run;
   iface: string | null;
+  applyRole: (role: LinkRole) => void;
 }) {
   const network = state.network;
   const peer = state.peer;
@@ -240,17 +288,7 @@ function ConnectStage({
               size="sm"
               variant="quiet"
               disabled={state.busy}
-              onClick={() =>
-                void run(async () => {
-                  const target = role === 'sender' ? 'receiver' : 'sender';
-                  const setup = await api.configureRole(target);
-                  dispatch({
-                    type: 'notice',
-                    message: `已改配成${target === 'sender' ? '发送端' : '接收端'} ${setup.ip}`,
-                  });
-                  dispatch({ type: 'network', network: await api.networkStatus() });
-                })
-              }
+              onClick={() => applyRole(role === 'sender' ? 'receiver' : 'sender')}
             >
               改做{role === 'sender' ? '接收端' : '发送端'}
             </Button>
@@ -265,14 +303,14 @@ function ConnectStage({
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             <span className="label text-lamp-standby">未提权</span>
             <span className="min-w-0 break-words text-[12px] text-lamp-standby">
-              配置直连与还原要改网卡设置，需要管理员权限
+              选角色时要改网卡设置，会请求管理员权限，确认 UAC 即可
             </span>
             <Button
               size="sm"
               disabled={state.busy}
               onClick={() =>
                 void run(async () => {
-                  await api.relaunchElevated();
+                  await api.relaunchElevated(null);
                   dispatch({ type: 'notice', message: '已请求以管理员身份重启，确认 UAC 后本窗口会退出' });
                 })
               }
@@ -344,7 +382,7 @@ function ConnectStage({
         ) : null}
       </Port>
       </div>
-      {role === null ? <RoleBand state={state} dispatch={dispatch} run={run} /> : null}
+      {role === null ? <RoleBand state={state} applyRole={applyRole} /> : null}
     </div>
   );
 }
@@ -352,27 +390,11 @@ function ConnectStage({
 /** 首次进入时的角色选择：把 .1 与 .2 这层细节收进软件里 */
 function RoleBand({
   state,
-  dispatch,
-  run,
+  applyRole,
 }: {
   state: AppState;
-  dispatch: Dispatch;
-  run: Run;
+  applyRole: (role: LinkRole) => void;
 }) {
-  const pick = (role: LinkRole) =>
-    void run(async () => {
-      const setup = await api.configureRole(role);
-      const label = role === 'sender' ? '发送端' : '接收端';
-      const peerLabel = role === 'sender' ? '接收端' : '发送端';
-      dispatch({
-        type: 'notice',
-        message: setup.already
-          ? `早就配好了：${label} ${setup.ip}`
-          : `已配成${label} ${setup.ip}，另一台选${peerLabel}即可`,
-      });
-      dispatch({ type: 'network', network: await api.networkStatus() });
-    });
-
   return (
     <section className="flex min-w-0 flex-wrap items-center gap-4 border border-panel-edge bg-panel-face px-4 py-3">
       <div className="flex min-w-0 flex-1 flex-col gap-1">
@@ -385,7 +407,7 @@ function RoleBand({
         <Button
           size="lg"
           disabled={state.busy}
-          onClick={() => pick('sender')}
+          onClick={() => applyRole('sender')}
           aria-label="把本机配成发送端"
         >
           <PlugZap className="size-4" /> 发送端
@@ -393,7 +415,7 @@ function RoleBand({
         <Button
           size="lg"
           disabled={state.busy}
-          onClick={() => pick('receiver')}
+          onClick={() => applyRole('receiver')}
           aria-label="把本机配成接收端"
         >
           接收端

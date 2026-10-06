@@ -774,12 +774,17 @@ function TransferStage({
             <span>剩余 {formatEta(progress?.bytes_done ?? 0, progress?.bytes_total ?? 0, progress?.bytes_per_sec ?? 0)}</span>
           </div>
           {state.finished ? (
-            <p className="mt-3 text-[13px] text-ink-dim">
-              已落到 <span className="reading break-all text-ink">{state.finished.root}</span>
-              {state.finished.claim_files.length > 0
-                ? ` · 已写认领文件 ${state.finished.claim_files.length} 个`
-                : ' · 按启动器的验证完整性收尾'}
-            </p>
+            <div className="mt-3 flex flex-col gap-1 text-[13px] text-ink-dim">
+              <p>
+                已落到 <span className="reading break-all text-ink">{state.finished.root}</span>
+                {state.finished.claim_files.length > 0
+                  ? ` · 已写认领文件 ${state.finished.claim_files.length} 个`
+                  : ''}
+              </p>
+              <p className="min-w-0 break-words">
+                接下来重启一次对应的启动器就能在库里看到它。如果启动时提示「远程畅玩」或「从另一台电脑串流」，说明启动器还没把它认成本地安装，在库里对它执行一次「验证文件完整性」即可
+              </p>
+            </div>
           ) : null}
         </div>
       </section>

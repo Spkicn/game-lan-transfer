@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use gamelift_core::net::client::{recv, Layout, RecvOptions};
 use gamelift_core::net::frame::{read_frame, write_frame, Frame};
-use gamelift_core::net::protocol::{self, FileEntry, Message, RequestItem};
+use gamelift_core::net::protocol::{self, ClaimFile, FileEntry, Message, RequestItem};
 use gamelift_core::net::resume::{self, FileState, TransferState};
 use gamelift_core::net::server::{ExtraRoot, Host, HostOptions};
 use gamelift_core::net::session::{self, Decision, RequestListener, TransferRequest};
@@ -644,6 +644,51 @@ fn request_then_approve_then_transfer() {
     host.shutdown();
     let _ = std::fs::remove_dir_all(&src);
     let _ = std::fs::remove_dir_all(&dest);
+}
+
+#[test]
+fn steam_claim_file_lands_in_the_chosen_library() {
+    // 发送端：一个 Steam 库里的游戏目录，附一份 appmanifest
+    let steamapps = temp_dir("claim-src-steamapps");
+    let game = steamapps.join("common").join("demo");
+    std::fs::create_dir_all(&game).expect("mkdir");
+    let payload = pattern(4096);
+    std::fs::write(game.join("data.bin"), &payload).expect("write");
+    let acf = "\"AppState\"\n{\n\t\"appid\"\t\t\"42\"\n\t\"installdir\"\t\t\"demo\"\n\t\"StateFlags\"\t\t\"4\"\n}\n";
+    std::fs::write(steamapps.join("appmanifest_42.acf"), acf).expect("write");
+
+    let mut host_config = host_options(&game, free_port(), 64 * 1024);
+    // 桌面端一次搬多项时主根也带名字，这里照抄那条路径
+    host_config.wrap_root = true;
+    host_config.claim_files = vec![ClaimFile {
+        relative_path: "appmanifest_42.acf".to_owned(),
+        content: acf.to_owned(),
+    }];
+    let mut host = Host::start(host_config).expect("host");
+
+    // 接收端：装到另一个盘的库里，清单要写进那个库的 steamapps
+    let library = temp_dir("claim-recv-lib");
+    let dest = library.join("steamapps").join("common");
+    std::fs::create_dir_all(&dest).expect("mkdir");
+    let mut options = recv_options(host.local_addr(), &dest, 64 * 1024);
+    options.layout = Layout::IntoDestination;
+    options.claim_root = Some(library.join("steamapps"));
+    let outcome = recv(&options, &mut |_| {}).expect("recv");
+
+    assert_eq!(read_file(&dest.join("demo").join("data.bin")), payload);
+    let manifest = library.join("steamapps").join("appmanifest_42.acf");
+    assert!(
+        manifest.is_file(),
+        "清单要落在接收端选中的库里: {}",
+        manifest.display()
+    );
+    let written = std::fs::read_to_string(&manifest).expect("read");
+    assert!(written.contains("\"StateFlags\"\t\t\"4\""), "got {written}");
+    assert_eq!(outcome.claim_files.len(), 1);
+
+    host.shutdown();
+    let _ = std::fs::remove_dir_all(&steamapps);
+    let _ = std::fs::remove_dir_all(&library);
 }
 
 /// 三个客户端同时拉取时，每一份内容都要完整且正确

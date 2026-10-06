@@ -23,6 +23,7 @@ import { formatBytes, formatEta, formatRate, percent, sameSubnet, spaceAdvice } 
 import {
   canAdvance,
   connected,
+  diagnosticsText,
   initialState,
   pickedBytes,
   pickedItems,
@@ -107,6 +108,13 @@ export default function App() {
         }
       } catch {
         // 没有默认目录时留空，由用户自己填
+      }
+    })();
+    void (async () => {
+      try {
+        dispatch({ type: 'version', value: await api.appVersion() });
+      } catch {
+        // 取不到版本不影响使用，只是诊断信息里少一行
       }
     })();
     void (async () => {
@@ -704,9 +712,11 @@ function TransferStage({
               : done
                 ? '已完成'
                 : state.running
-                  ? state.role === 'send' && (state.progress?.bytes_done ?? 0) === 0
-                    ? '等对端开始拉取'
-                    : '传输中'
+                  ? state.sendResult === null
+                    ? '等对端同意'
+                    : state.role === 'send' && (state.progress?.bytes_done ?? 0) === 0
+                      ? '等对端开始拉取'
+                      : '传输中'
                   : state.role === 'receive'
                     ? '等待你同意'
                     : state.sendResult?.approved
@@ -1044,12 +1054,29 @@ function NextAction({
 }) {
   const done = transferComplete(state);
 
+  // 出错时把上下文一次复制出来，用户直接发给开发者
+  const copyDiagnostics = () => {
+    try {
+      void navigator.clipboard
+        .writeText(diagnosticsText(state))
+        .then(() =>
+          dispatch({ type: 'notice', message: '诊断信息已复制，直接发给开发者即可' }),
+        )
+        .catch(() => dispatch({ type: 'error', message: '复制失败，请手动截图' }));
+    } catch {
+      dispatch({ type: 'error', message: '当前环境不支持复制，请手动截图' });
+    }
+  };
+
   if (state.error) {
     return (
       <>
         <Lamp state="fault" />
-        <span className="text-lamp-fault">{state.error}</span>
-        <Button size="sm" variant="quiet" className="ml-auto" onClick={() => dispatch({ type: 'error', message: null })}>
+        <span className="min-w-0 break-all text-lamp-fault">{state.error}</span>
+        <Button size="sm" variant="quiet" className="ml-auto" onClick={copyDiagnostics}>
+          复制诊断
+        </Button>
+        <Button size="sm" variant="quiet" onClick={() => dispatch({ type: 'error', message: null })}>
           知道了
         </Button>
       </>
@@ -1108,9 +1135,11 @@ function NextAction({
         {done
           ? '这一单完成了'
           : state.running
-            ? state.role === 'send' && (state.progress?.bytes_done ?? 0) === 0
-              ? '对端已同意，等它开始拉取；如果一直不动，看对端窗口是否报错'
-              : '正在搬运，中断了也没关系，重新发起只补没传完的部分'
+            ? state.sendResult === null
+              ? '已经发过去了，等对端点同意'
+              : state.role === 'send' && (state.progress?.bytes_done ?? 0) === 0
+                ? '对端已同意，等它开始拉取；一直不动就看对端窗口是否报错'
+                : '正在搬运，中断了也没关系，重新发起只补没传完的部分'
             : state.role === 'receive'
               ? `对端想送来 ${state.transferItems.length} 项，选好目标文件夹后同意`
               : '等待对端处理请求'}

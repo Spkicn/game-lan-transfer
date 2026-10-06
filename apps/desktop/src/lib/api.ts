@@ -79,6 +79,14 @@ export function resetLink(): Promise<void> {
   return invoke<void>('reset_link');
 }
 
+/** 当前程序版本，诊断信息里带上 */
+export function appVersion(): Promise<string> {
+  if (MOCK) {
+    return mock('0.2.3');
+  }
+  return invoke<string>('app_version');
+}
+
 /** 当前是否以管理员身份运行，探测不出来时为 null */
 export function elevationStatus(): Promise<boolean | null> {
   if (MOCK) {

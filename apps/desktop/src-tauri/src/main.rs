@@ -171,7 +171,7 @@ struct AppState {
 }
 
 /// 扫描本机已安装的游戏
-#[tauri::command]
+#[tauri::command(async)]
 fn scan_games() -> Vec<GameEntry> {
     let mut games = Vec::new();
     for adapter in adapters() {
@@ -199,7 +199,7 @@ fn scan_games() -> Vec<GameEntry> {
 /// # Errors
 ///
 /// 本机地址不可解析或发现端口被占用时返回说明
-#[tauri::command]
+#[tauri::command(async)]
 fn discover_peers(iface: Option<String>, seconds: u64) -> Result<Vec<PeerEntry>, String> {
     let ip = local_ip(iface.as_deref())?;
     let socket = discovery::bind(ip, discovery::DISCOVERY_PORT).map_err(describe)?;
@@ -222,7 +222,7 @@ fn discover_peers(iface: Option<String>, seconds: u64) -> Result<Vec<PeerEntry>,
 /// # Errors
 ///
 /// 连接失败、目标目录不可写或空间查询失败时返回说明
-#[tauri::command]
+#[tauri::command(async)]
 fn preview_target(
     peer: String,
     want: String,
@@ -263,7 +263,7 @@ fn preview_target(
 /// # Errors
 ///
 /// 目录不存在、端口占用或广播套接字创建失败时返回说明
-#[tauri::command]
+#[tauri::command(async)]
 fn start_host(
     state: State<'_, AppState>,
     install_dir: String,
@@ -323,7 +323,7 @@ fn start_host(
 }
 
 /// 停止源端服务与广播
-#[tauri::command]
+#[tauri::command(async)]
 fn stop_host(state: State<'_, AppState>) {
     stop_running_host(&state);
 }
@@ -344,7 +344,7 @@ fn stop_running_host(state: &AppState) {
 ///
 /// 握手被拒、空间不足或传输失败时返回说明
 #[allow(clippy::too_many_arguments)]
-#[tauri::command]
+#[tauri::command(async)]
 fn start_recv(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -419,7 +419,7 @@ fn start_recv(
 }
 
 /// 取消正在进行的接收，已完成的块会保留
-#[tauri::command]
+#[tauri::command(async)]
 fn cancel_recv(state: State<'_, AppState>) {
     if let Some(flag) = lock(&state.cancel).as_ref() {
         flag.store(true, Ordering::Relaxed);
@@ -427,7 +427,7 @@ fn cancel_recv(state: State<'_, AppState>) {
 }
 
 /// 本机默认目标目录：Steam 库的 `common` 目录
-#[tauri::command]
+#[tauri::command(async)]
 fn default_dest() -> Option<String> {
     let root = gamelift_launchers::steam::steam_root()?;
     Some(
@@ -473,7 +473,7 @@ struct NetworkStatus {
 }
 
 /// 读取网卡与可用地址
-#[tauri::command]
+#[tauri::command(async)]
 fn network_status() -> NetworkStatus {
     let nics = link::list_nics();
     let picked = link::preferred_ipv4(&nics);
@@ -535,7 +535,7 @@ fn network_status() -> NetworkStatus {
 /// # Errors
 ///
 /// 找不到物理网口或提权失败时返回说明
-#[tauri::command]
+#[tauri::command(async)]
 fn setup_link(host: u8) -> Result<String, String> {
     link::setup_direct_link(host).map_err(describe)
 }
@@ -565,7 +565,7 @@ fn role_octet(role: &str) -> Result<u8, String> {
 /// # Errors
 ///
 /// 角色不认识、找不到物理网口或未提权时返回说明
-#[tauri::command]
+#[tauri::command(async)]
 fn configure_role(role: String) -> Result<RoleSetup, String> {
     let octet = role_octet(&role)?;
     let setup = link::configure_direct_link(octet).map_err(describe)?;
@@ -581,7 +581,7 @@ fn configure_role(role: String) -> Result<RoleSetup, String> {
 /// # Errors
 ///
 /// 还原失败时返回说明
-#[tauri::command]
+#[tauri::command(async)]
 fn reset_link() -> Result<(), String> {
     let mut first_error = None;
     for octet in [1_u8, 2] {
@@ -600,7 +600,7 @@ fn reset_link() -> Result<(), String> {
 /// # Errors
 ///
 /// 还原失败时返回说明
-#[tauri::command]
+#[tauri::command(async)]
 fn revert_link() -> Result<(), String> {
     reset_link()
 }
@@ -686,7 +686,7 @@ const EVENT_REQUEST: &str = "transfer://request";
 /// # Errors
 ///
 /// 目录不可读时返回说明
-#[tauri::command]
+#[tauri::command(async)]
 fn list_local(path: Option<String>) -> Result<Vec<LocalEntry>, String> {
     let Some(path) = path.filter(|value| !value.is_empty()) else {
         return Ok(list_drives());
@@ -738,7 +738,7 @@ fn list_drives() -> Vec<LocalEntry> {
 /// # Errors
 ///
 /// 本机地址不可用或端口被占用时返回说明
-#[tauri::command]
+#[tauri::command(async)]
 fn start_listen(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -856,7 +856,7 @@ fn spawn_request_poller(
 }
 
 /// 停止接收请求
-#[tauri::command]
+#[tauri::command(async)]
 fn stop_listen(state: State<'_, AppState>) {
     stop_listen_inner(&state);
 }
@@ -878,7 +878,7 @@ fn stop_listen_inner(state: &AppState) {
 /// # Errors
 ///
 /// 没有在监听、请求已失效或未给出目标目录时返回说明
-#[tauri::command]
+#[tauri::command(async)]
 fn respond_request(
     state: State<'_, AppState>,
     id: u64,
@@ -913,7 +913,7 @@ fn respond_request(
 /// # Errors
 ///
 /// 内容不存在、端口被占用或对端不可达时返回说明
-#[tauri::command]
+#[tauri::command(async)]
 #[allow(clippy::too_many_arguments)]
 fn start_send(
     app: AppHandle,
@@ -951,15 +951,14 @@ fn start_send(
         };
         extras.push(ExtraRoot { name, path });
     }
-    let code = pairing
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(discovery::new_pairing_code);
+    // 配对码只在两边都填了同一串时起作用，空着就是不加这道校验，不替用户生成
+    let code = pairing.filter(|value| !value.is_empty());
     let host = server::Host::start(HostOptions {
         root: root.clone(),
         extra_roots: extras,
         wrap_root: true,
         bind: SocketAddr::new(ip, net::DEFAULT_SESSION_PORT),
-        pairing: Some(code.clone()),
+        pairing: code.clone(),
         title: root_name.clone(),
         platform: platform.clone().unwrap_or_else(|| "files".to_owned()),
         root_name: Some(root_name.clone()),
@@ -996,7 +995,7 @@ fn start_send(
         items: summaries,
         total_bytes: total,
         transfer_port: port,
-        pairing: Some(code.clone()),
+        pairing: code.clone(),
         want: root_name,
         platform,
     };
@@ -1018,7 +1017,7 @@ fn start_send(
             port,
             approved: true,
             dest: Some(dest),
-            message: format!("对端已同意，配对码 {code}"),
+            message: String::new(),
         },
         Decision::Reject { reason } => SendInfo {
             port,
@@ -1108,7 +1107,7 @@ fn spawn_send_progress(app: AppHandle, counters: ServerCounters, stop: Arc<Atomi
 /// # Errors
 ///
 /// 路径无法访问时返回说明
-#[tauri::command]
+#[tauri::command(async)]
 fn free_space(path: String) -> Result<u64, String> {
     link::free_bytes_at(&PathBuf::from(path)).map_err(describe)
 }
@@ -1161,6 +1160,7 @@ fn main() {
             elevation_status,
             relaunch_elevated,
             startup_role,
+            app_version,
             steam_libraries,
             list_local,
             start_listen,
@@ -1176,8 +1176,14 @@ fn main() {
     }
 }
 
+/// 当前程序版本，诊断信息里带上
+#[tauri::command(async)]
+fn app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_owned()
+}
+
 /// 当前是否以管理员身份运行，探测不出来时返回空
-#[tauri::command]
+#[tauri::command(async)]
 fn elevation_status() -> Option<bool> {
     link::elevation_state()
 }
@@ -1189,7 +1195,7 @@ fn elevation_status() -> Option<bool> {
 /// # Errors
 ///
 /// 取不到自身路径、无法启动提权进程或用户取消 UAC 时返回说明
-#[tauri::command]
+#[tauri::command(async)]
 fn relaunch_elevated(app: AppHandle, role: Option<String>) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(io_text)?;
     // 角色只认这两个值，不把界面传来的字符串直接拼进脚本
@@ -1208,7 +1214,7 @@ fn relaunch_elevated(app: AppHandle, role: Option<String>) -> Result<(), String>
 }
 
 /// 提权重启时带过来的待办角色
-#[tauri::command]
+#[tauri::command(async)]
 fn startup_role() -> Option<String> {
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -1235,7 +1241,7 @@ struct SteamLibraryInfo {
 }
 
 /// 列出本机所有 Steam 库，供接收端挑装到哪个盘
-#[tauri::command]
+#[tauri::command(async)]
 fn steam_libraries() -> Vec<SteamLibraryInfo> {
     gamelift_launchers::steam::libraries()
         .into_iter()

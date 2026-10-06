@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   canAdvance,
   connected,
+  diagnosticsText,
   initialState,
   pickedBytes,
   pickedItems,
@@ -157,6 +158,31 @@ describe('三阶段状态机', () => {
     });
     state = reduce(state, { type: 'toggle-pick', path: 'D:/a.bin' });
     expect(pickedPlatform(state)).toBeNull();
+  });
+
+  it('诊断信息把当前状态一次说全', () => {
+    let state = reduce(initialState, {
+      type: 'network',
+      network: {
+        nics: [],
+        address: '192.168.88.1',
+        nic_name: '以太网',
+        is_physical: true,
+        direct_link: true,
+        link_role: 'sender',
+        address_problem: null,
+        hint: '',
+      },
+    });
+    state = reduce(state, { type: 'version', value: '0.2.3' });
+    state = reduce(state, { type: 'peer', peer });
+    state = reduce(state, { type: 'error', message: '连接超时' });
+    const text = diagnosticsText(state);
+    expect(text).toContain('版本: 0.2.3');
+    expect(text).toContain('本机地址: 192.168.88.1 (以太网)');
+    expect(text).toContain('角色: 发送端');
+    expect(text).toContain('对端: other 192.168.88.2:27101');
+    expect(text).toContain('最近错误: 连接超时');
   });
 
   it('拉取要用发送方的传输端口与配对码，不能用本机设置', () => {

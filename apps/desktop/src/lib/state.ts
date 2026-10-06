@@ -161,6 +161,8 @@ export interface AppState {
   network: NetworkStatus | null;
   /** 是否以管理员身份运行，配置直连需要 */
   elevated: boolean | null;
+  /** 程序版本，诊断信息里带上 */
+  version: string | null;
   /** 提权重启前选好的角色，重启后自动配好 */
   pendingRole: LinkRole | null;
   peers: PeerEntry[];
@@ -199,6 +201,7 @@ export const initialState: AppState = {
   notice: null,
   network: null,
   elevated: null,
+  version: null,
   pendingRole: null,
   peers: [],
   peer: null,
@@ -232,6 +235,8 @@ export type Action =
   | { type: 'notice'; message: string | null }
   | { type: 'network'; network: NetworkStatus | null }
   | { type: 'elevated'; value: boolean | null }
+  | { type: 'version'; value: string }
+  | { type: 'version'; value: string }
   | { type: 'pending-role'; role: LinkRole | null }
   | { type: 'peers'; peers: PeerEntry[] }
   | { type: 'peer'; peer: PeerEntry | null }
@@ -277,6 +282,8 @@ export function reduce(state: AppState, action: Action): AppState {
       return { ...state, network: action.network, busy: false };
     case 'elevated':
       return { ...state, elevated: action.value };
+    case 'version':
+      return { ...state, version: action.value };
     case 'pending-role':
       return { ...state, pendingRole: action.role };
     case 'peers':
@@ -425,6 +432,25 @@ export function pullPlan(incoming: IncomingEvent): PullPlan {
     pairing: incoming.pairing,
     platform: incoming.platform,
   };
+}
+
+/** 一份可复制的诊断文本，出问题时直接发给开发者 */
+export function diagnosticsText(state: AppState): string {
+  const network = state.network;
+  const lines = [
+    'GameLift 诊断',
+    `版本: ${state.version ?? '未知'}`,
+    `时间: ${new Date().toISOString()}`,
+    `本机地址: ${network?.address ?? '无'}${network?.nic_name ? ` (${network.nic_name})` : ''}`,
+    `角色: ${state.network?.link_role === 'sender' ? '发送端' : state.network?.link_role === 'receiver' ? '接收端' : '未配置'}`,
+    `地址问题: ${network?.address_problem ?? '无'}`,
+    `对端: ${state.peer ? `${state.peer.name} ${state.peer.addr}:${state.peer.session_port}` : '未接上'}`,
+    `已选: ${state.picked.length} 项`,
+    `本机 Steam 库: ${state.steamLibraries.length} 个`,
+    `最近错误: ${state.error ?? '无'}`,
+    `最近提示: ${state.notice ?? '无'}`,
+  ];
+  return lines.join('\n');
 }
 
 /** 全选的都是同一个平台的游戏时才带上平台，用来决定认领文件写到哪 */

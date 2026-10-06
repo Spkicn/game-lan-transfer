@@ -110,18 +110,42 @@ describe('三阶段状态机', () => {
     expect(state.pairing).toBe('123456');
   });
 
-  it('队列条目从已选内容整理出来，名字取末段', () => {
+  it('队列条目用记下的名字，游戏用显示名', () => {
     let state = reduce(initialState, { type: 'games', games: [game] });
     state = reduce(state, {
       type: 'entries',
       entries: [{ name: 'a.bin', path: 'D:/a.bin', is_dir: false, bytes: 1024 }],
     });
+    state = reduce(state, {
+      type: 'toggle-pick',
+      path: 'D:/a.bin',
+      entry: { name: 'a.bin', path: 'D:/a.bin', is_dir: false, bytes: 1024 },
+    });
     state = reduce(state, { type: 'toggle-pick', path: game.install_dir });
-    state = reduce(state, { type: 'toggle-pick', path: 'D:/a.bin' });
     expect(pickedItems(state)).toEqual([
-      { name: 'demo', bytes: 4096, source: 'D:/games/demo' },
       { name: 'a.bin', bytes: 1024, source: 'D:/a.bin' },
+      { name: '示例游戏', bytes: 4096, source: 'D:/games/demo' },
     ]);
+  });
+
+  it('换了目录也还算得出已选内容的大小', () => {
+    let state = reduce(initialState, {
+      type: 'entries',
+      entries: [{ name: 'a.bin', path: 'D:/a.bin', is_dir: false, bytes: 1024 }],
+    });
+    state = reduce(state, {
+      type: 'toggle-pick',
+      path: 'D:/a.bin',
+      entry: { name: 'a.bin', path: 'D:/a.bin', is_dir: false, bytes: 1024 },
+    });
+    expect(pickedBytes(state)).toBe(1024);
+    // 列到别的目录，列表里已经没有这一条了
+    state = reduce(state, { type: 'entries', entries: [] });
+    expect(pickedBytes(state)).toBe(1024);
+    expect(pickedItems(state)[0]?.name).toBe('a.bin');
+    // 取消选中后不再计数
+    state = reduce(state, { type: 'toggle-pick', path: 'D:/a.bin' });
+    expect(pickedBytes(state)).toBe(0);
   });
 
   it('记录本机在这一单里的角色与队列', () => {

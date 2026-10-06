@@ -215,6 +215,8 @@ export interface AppState {
   incomingDest: string;
   /** 本机上的 Steam 库，接收端挑盘时用 */
   steamLibraries: SteamLibrary[];
+  /** 选中时记下的条目，换目录后仍算得出大小 */
+  pickedMeta: Record<string, LocalEntry>;
   /** 已经完成的传输，留在列表里直到用户清除 */
   history: TransferRecord[];
   /** 接收端为目标目录选定的认领根，Steam 库时不是空 */
@@ -255,6 +257,7 @@ export const initialState: AppState = {
   incomingDest: '',
   steamLibraries: [],
   history: [],
+  pickedMeta: {},
   destClaimRoot: null,
   destCwd: null,
   destEntries: [],
@@ -297,7 +300,7 @@ export type Action =
   | { type: 'dest-entries'; entries: LocalEntry[] }
   | { type: 'games'; games: GameEntry[] }
   | { type: 'source'; source: PickSource }
-  | { type: 'toggle-pick'; path: string }
+  | { type: 'toggle-pick'; path: string; entry?: LocalEntry }
   | { type: 'clear-picks' }
   | { type: 'cwd'; cwd: string | null }
   | { type: 'entries'; entries: LocalEntry[] }
@@ -361,13 +364,20 @@ export function reduce(state: AppState, action: Action): AppState {
     case 'source':
       return { ...state, source: action.source };
     case 'toggle-pick': {
-      const picked = state.picked.includes(action.path)
+      const already = state.picked.includes(action.path);
+      const picked = already
         ? state.picked.filter((item) => item !== action.path)
         : [...state.picked, action.path];
-      return { ...state, picked };
+      const pickedMeta = { ...state.pickedMeta };
+      if (already) {
+        delete pickedMeta[action.path];
+      } else if (action.entry) {
+        pickedMeta[action.path] = action.entry;
+      }
+      return { ...state, picked, pickedMeta };
     }
     case 'clear-picks':
-      return { ...state, picked: [] };
+      return { ...state, picked: [], pickedMeta: {} };
     case 'cwd':
       return { ...state, cwd: action.cwd, busy: false };
     case 'entries':
@@ -402,6 +412,11 @@ export function reduce(state: AppState, action: Action): AppState {
 /** 已选内容的总字节数 */
 export function pickedBytes(state: AppState): number {
   return state.picked.reduce((total, path) => {
+    // 记住选中时的条目，换目录之后也算得出总量
+    const remembered = state.pickedMeta[path];
+    if (remembered) {
+      return total + remembered.bytes;
+    }
     const game = state.games.find((entry) => entry.install_dir === path);
     if (game) {
       return total + game.size_bytes;
@@ -433,12 +448,14 @@ export function awaitingIncoming(state: AppState): boolean {
 }
 
 /** 已选内容整理成队列条目 */
-export function pickedItems(state: AppState): TransferItem[] {  return state.picked.map((path) => {
+export function pickedItems(state: AppState): TransferItem[] {
+  return state.picked.map((path) => {
     const game = state.games.find((entry) => entry.install_dir === path);
+    const remembered = state.pickedMeta[path];
     const local = state.entries.find((entry) => entry.path === path);
     return {
-      name: path.split(/[\\/]/).pop() ?? path,
-      bytes: game?.size_bytes ?? local?.bytes ?? 0,
+      name: remembered?.name ?? game?.name ?? path.split(/[\\/]/).pop() ?? path,
+      bytes: remembered?.bytes ?? game?.size_bytes ?? local?.bytes ?? 0,
       source: path,
     };
   });

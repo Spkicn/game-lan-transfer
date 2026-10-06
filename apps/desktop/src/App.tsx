@@ -486,6 +486,103 @@ function RoleBand({
   );
 }
 
+/** 目录浏览器：发送端选内容与接收端选落盘位置共用，避免两份实现走偏 */
+function DirBrowser({
+  busy,
+  current,
+  entries,
+  isSelected,
+  emptyHint,
+  onEdit,
+  onBrowse,
+  onToggle,
+}: {
+  busy: boolean;
+  current: string | null;
+  entries: LocalEntry[];
+  isSelected: (entry: LocalEntry) => boolean;
+  emptyHint: string;
+  onEdit: (value: string) => void;
+  onBrowse: (path: string | null) => void;
+  onToggle: (entry: LocalEntry) => void;
+}) {
+  // 盘符根本身就是最上层，它的上一层是盘符列表
+  const isDriveRoot = current !== null && /^[A-Za-z]:[\\/]?$/.test(current);
+  const parent =
+    current === null || isDriveRoot ? null : current.replace(/[\\/][^\\/]*$/, '');
+
+  return (
+    <div className="flex min-w-0 flex-col">
+      <div className="flex min-w-0 items-center gap-2 border-b border-panel-edge px-4 py-2">
+        <Button
+          size="sm"
+          variant="quiet"
+          disabled={current === null || busy}
+          onClick={() => onBrowse(parent)}
+        >
+          <ArrowUp className="size-3.5" /> {isDriveRoot ? '盘符' : '上层'}
+        </Button>
+        <Input
+          value={current ?? ''}
+          aria-label="当前目录"
+          placeholder="点「列出」从盘符开始，或粘贴一个路径后回车"
+          onChange={(event) => onEdit(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              onBrowse(current);
+            }
+          }}
+        />
+        <Button size="sm" variant="quiet" disabled={busy} onClick={() => onBrowse(current)}>
+          <RefreshCw className="size-3.5" /> 列出
+        </Button>
+      </div>
+      <nav
+        aria-label="路径"
+        className="flex min-w-0 flex-wrap items-center gap-1 border-b border-panel-edge px-4 py-1.5"
+      >
+        <Button size="sm" variant="quiet" onClick={() => onBrowse(null)}>
+          <HardDrive className="size-3.5" /> 盘符
+        </Button>
+        {pathSegments(current).map((segment) => (
+          <Button
+            key={segment.path}
+            size="sm"
+            variant="quiet"
+            onClick={() => onBrowse(segment.path)}
+          >
+            {segment.label}
+          </Button>
+        ))}
+      </nav>
+      <ul className="max-h-[46vh] overflow-y-auto">
+        {sortEntries(entries).map((entry) => (
+          <RailRow
+            key={entry.path}
+            selected={isSelected(entry)}
+            onSelect={() => onToggle(entry)}
+            onActivate={entry.is_dir ? () => onBrowse(entry.path) : undefined}
+            selectLabel={`选中 ${entry.name}`}
+            title={entry.is_dir ? `${entry.name}\\` : entry.name}
+            meta={entry.path}
+            reading={
+              entry.is_dir
+                ? current === null && entry.bytes > 0
+                  ? `可用 ${formatBytes(entry.bytes)}`
+                  : '文件夹'
+                : formatBytes(entry.bytes)
+            }
+            state={entry.is_dir ? <FolderUp className="size-3.5 text-ink-faint" /> : null}
+          />
+        ))}
+        {entries.length === 0 ? (
+          <li className="px-4 py-3 text-[13px] text-ink-dim">{emptyHint}</li>
+        ) : null}
+      </ul>
+    </div>
+  );
+}
+
 /** 内容阶段：来源页签与条目 */
 function PickStage({
   state,
@@ -510,21 +607,12 @@ function PickStage({
       dispatch({ type: 'entries', entries });
     });
 
-  // 进目录与粘贴路径都走同一条路，避免两套逻辑
+  // 进目录与粘贴路径都走同一条路，界面上不再各写一套
   const browse = (path: string | null) =>
     run(async () => {
       dispatch({ type: 'cwd', cwd: path });
       dispatch({ type: 'entries', entries: await api.listLocal(path) });
     });
-
-  const enter = (entry: LocalEntry) => browse(entry.path);
-
-  // 盘符根本身就是最上层，它的上一层是盘符列表
-  const isDriveRoot = state.cwd !== null && /^[A-Za-z]:[\\/]?$/.test(state.cwd);
-  const parent =
-    state.cwd === null || isDriveRoot
-      ? null
-      : state.cwd.replace(/[\\/][^\\/]*$/, '');
 
   // 接收端不选内容，只等着发送端选好之后发来请求
   if ((state.network?.link_role ?? null) === 'receiver') {
@@ -571,91 +659,47 @@ function PickStage({
           </Button>
         </header>
         {state.source === 'files' ? (
-          <div className="flex items-center gap-2 border-b border-panel-edge px-4 py-2">
-            <Button
-              size="sm"
-              variant="quiet"
-              disabled={state.cwd === null || state.busy}
-              onClick={() => void browse(parent)}
-            >
-              <ArrowUp className="size-3.5" /> {isDriveRoot ? '盘符' : '上层'}
-            </Button>
-            <Input
-              value={state.cwd ?? ''}
-              aria-label="当前目录"
-              placeholder="点「列出目录」从盘符开始，或粘贴一个路径后回车"
-              onChange={(event) => dispatch({ type: 'cwd', cwd: event.target.value })}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  void browse(state.cwd);
+          <DirBrowser
+            busy={state.busy}
+            current={state.cwd}
+            entries={state.entries}
+            isSelected={(entry) => state.picked.includes(entry.path)}
+            emptyHint="这一层没有可选项，点「上层」返回，或点「盘符」换一个盘"
+            onEdit={(value) => dispatch({ type: 'cwd', cwd: value })}
+            onBrowse={(path) => void browse(path)}
+            onToggle={(entry) => dispatch({ type: 'toggle-pick', path: entry.path, entry })}
+          />
+        ) : (
+          <ul className="max-h-[46vh] overflow-y-auto">
+            {state.games.map((game) => (
+              <RailRow
+                key={game.id}
+                selected={state.picked.includes(game.install_dir)}
+                onSelect={() =>
+                  dispatch({
+                    type: 'toggle-pick',
+                    path: game.install_dir,
+                    entry: {
+                      name: game.name,
+                      path: game.install_dir,
+                      is_dir: true,
+                      bytes: game.size_bytes,
+                    },
+                  })
                 }
-              }}
-            />
-          </div>
-        ) : null}
-        {state.source === 'files' ? (
-          <nav
-            aria-label="路径"
-            className="flex min-w-0 flex-wrap items-center gap-1 border-b border-panel-edge px-4 py-1.5"
-          >
-            <Button size="sm" variant="quiet" onClick={() => void browse(null)}>
-              <HardDrive className="size-3.5" /> 盘符
-            </Button>
-            {pathSegments(state.cwd).map((segment) => (
-              <Button
-                key={segment.path}
-                size="sm"
-                variant="quiet"
-                onClick={() => void browse(segment.path)}
-              >
-                {segment.label}
-              </Button>
+                selectLabel={`选中 ${game.name}`}
+                title={game.name}
+                meta={`${game.platform} · ${game.install_dir}`}
+                reading={formatBytes(game.size_bytes)}
+              />
             ))}
-          </nav>
-        ) : null}
-        <ul className="max-h-[46vh] overflow-y-auto">
-          {state.source === 'games'
-            ? state.games.map((game) => (
-                <RailRow
-                  key={game.id}
-                  selected={state.picked.includes(game.install_dir)}
-                  onSelect={() => dispatch({ type: 'toggle-pick', path: game.install_dir })}
-                  selectLabel={`选中 ${game.name}`}
-                  title={game.name}
-                  meta={`${game.platform} · ${game.install_dir}`}
-                  reading={formatBytes(game.size_bytes)}
-                />
-              ))
-            : sortEntries(state.entries).map((entry) => (
-                <RailRow
-                  key={entry.path}
-                  selected={state.picked.includes(entry.path)}
-                  onSelect={() => dispatch({ type: 'toggle-pick', path: entry.path })}
-                  onActivate={entry.is_dir ? () => void enter(entry) : undefined}
-                  selectLabel={`选中 ${entry.name}`}
-                  title={entry.is_dir ? `${entry.name}\\` : entry.name}
-                  meta={entry.path}
-                  reading={
-                    entry.is_dir
-                      ? state.cwd === null && entry.bytes > 0
-                        ? `可用 ${formatBytes(entry.bytes)}`
-                        : '文件夹'
-                      : formatBytes(entry.bytes)
-                  }
-                  state={entry.is_dir ? <FolderUp className="size-3.5 text-ink-faint" /> : null}
-                />
-              ))}
-          {state.source === 'games' && state.games.length === 0 ? (
-            <li className="px-4 py-3 text-[13px] text-ink-dim">
-              还没有读到游戏库，点右上「扫描游戏库」；也可以切到「文件夹」发任意内容
-            </li>
-          ) : null}
-          {state.source === 'files' && state.entries.length === 0 ? (
-            <li className="px-4 py-3 text-[13px] text-ink-dim">
-              这一层没有可选项，点「上层」返回，或点「列出目录」从盘符开始
-            </li>
-          ) : null}
-        </ul>
+            {state.games.length === 0 ? (
+              <li className="px-4 py-3 text-[13px] text-ink-dim">
+                还没有读到游戏库，点右上「扫描游戏库」；也可以切到「文件夹」发任意内容
+              </li>
+            ) : null}
+          </ul>
+        )}
       </section>
 
       <section className="flex min-w-0 flex-col gap-6">
@@ -777,7 +821,7 @@ function TransferStage({
                     : state.role === 'send' && (state.progress?.bytes_done ?? 0) === 0
                       ? '等对端开始拉取'
                       : '传输中'
-                  : state.role === 'receive'
+                  : state.role === 'receive' || state.incoming !== null
                     ? '等待你同意'
                     : state.sendResult?.approved
                       ? '对端已同意'
@@ -891,7 +935,6 @@ function IncomingPanel({
 }) {
   const [space, setSpace] = useState<string>('');
   const isSteamGame = incoming.platform === 'steam';
-  const destParent = state.destCwd ? state.destCwd.replace(/[\\/][^\\/]*$/, '') : null;
 
   // 进目录即选定，用户不需要再点一次确认
   const browseDest = (path: string | null) =>
@@ -1030,48 +1073,16 @@ function IncomingPanel({
         {isSteamGame && state.steamLibraries.length > 0 ? null : (
           <div className="flex min-w-0 flex-col gap-1">
             <span className="label">{isSteamGame ? '或者自己指定一个文件夹' : '挑一个文件夹'}</span>
-            <div className="flex min-w-0 items-center gap-2">
-              <Button
-                size="sm"
-                variant="quiet"
-                disabled={!destParent || state.busy}
-                onClick={() => void browseDest(destParent)}
-              >
-                <ArrowUp className="size-3.5" /> 上层
-              </Button>
-              <span className="reading min-w-0 flex-1 truncate text-[12px] text-ink-faint">
-                {state.destCwd ?? '点右边「列出」从盘符开始'}
-              </span>
-              <Button
-                size="sm"
-                variant="quiet"
-                disabled={state.busy}
-                onClick={() => void browseDest(state.destCwd)}
-              >
-                <RefreshCw className="size-3.5" /> 列出
-              </Button>
-            </div>
-            <ul className="max-h-[22vh] overflow-y-auto border border-panel-edge">
-              {state.destEntries
-                .filter((entry) => entry.is_dir)
-                .map((entry) => (
-                  <RailRow
-                    key={entry.path}
-                    selected={state.incomingDest === entry.path}
-                    onActivate={() => void browseDest(entry.path)}
-                    onSelect={() => dispatch({ type: 'incoming-dest', value: entry.path })}
-                    selectLabel={`选 ${entry.name}`}
-                    title={`${entry.name}\\`}
-                    meta={entry.path}
-                    reading="文件夹"
-                  />
-                ))}
-              {state.destEntries.length === 0 ? (
-                <li className="px-4 py-3 text-[13px] text-ink-dim">
-                  点「列出」从盘符开始挑，点文件夹进去，勾上就是选定
-                </li>
-              ) : null}
-            </ul>
+            <DirBrowser
+              busy={state.busy}
+              current={state.destCwd}
+              entries={state.destEntries.filter((entry) => entry.is_dir)}
+              isSelected={(entry) => state.incomingDest === entry.path}
+              emptyHint="点「列出」从盘符开始挑，点文件夹进去，勾上就是选定"
+              onEdit={(value) => dispatch({ type: 'dest-cwd', value })}
+              onBrowse={(path) => void browseDest(path)}
+              onToggle={(entry) => dispatch({ type: 'incoming-dest', value: entry.path })}
+            />
           </div>
         )}
 
@@ -1239,9 +1250,11 @@ function NextAction({
               : state.role === 'send' && (state.progress?.bytes_done ?? 0) === 0
                 ? '对端已同意，等它开始拉取；一直不动就看对端窗口是否报错'
                 : '正在搬运，中断了也没关系，重新发起只补没传完的部分'
-            : state.role === 'receive'
-              ? `对端想送来 ${state.transferItems.length} 项，选好目标文件夹后同意`
-              : '等待对端处理请求'}
+            : state.incoming !== null
+              ? `对端想送来 ${state.incoming.items.length} 项，选好放到哪里后同意`
+              : state.role === 'receive'
+                ? `对端想送来 ${state.transferItems.length} 项，选好目标文件夹后同意`
+                : '等待对端处理请求'}
       </span>
       <Button
         size="sm"

@@ -238,6 +238,8 @@ function ConnectStage({
       }
       const listening = await api.startListen(iface, state.pairing.trim() || null);
       dispatch({ type: 'listening', listening });
+      // 地址可能刚被改过，刷新一次免得界面拿着过期地址
+      dispatch({ type: 'network', network: await api.networkStatus() });
       if (peers.length === 0) {
         dispatch({ type: 'notice', message: '没有发现对端，确认两台机器在同一网段，或让对方也打开本软件' });
       }
@@ -294,6 +296,11 @@ function ConnectStage({
             </Button>
           </div>
         )}
+        {network?.address_problem ? (
+          <p className="min-w-0 break-words text-[12px] text-lamp-fault">
+            {network.address_problem}
+          </p>
+        ) : null}
         {role !== null || network === null ? (
           <p className="min-w-0 break-words text-[12px] text-ink-dim">
             {network?.hint ?? '正在读取网络'}

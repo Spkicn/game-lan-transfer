@@ -93,8 +93,15 @@ pub fn decode_announce(bytes: &[u8]) -> Option<Peer> {
 ///
 /// 绑定或套接字配置失败返回 [`Error::Io`]
 pub fn bind(local_ip: IpAddr, port: u16) -> Result<UdpSocket> {
-    let socket = UdpSocket::bind(SocketAddr::new(local_ip, port))
-        .map_err(|err| Error::Io(format!("绑定发现端口失败: {err}")))?;
+    let socket = UdpSocket::bind(SocketAddr::new(local_ip, port)).map_err(|err| {
+        if err.kind() == std::io::ErrorKind::AddrNotAvailable {
+            Error::Io(format!(
+                "本机地址 {local_ip} 现在不在任何网卡上，可能刚改过网络设置：点「重新检测」刷新后再试"
+            ))
+        } else {
+            Error::Io(format!("绑定发现端口失败: {err}"))
+        }
+    })?;
     socket
         .set_broadcast(true)
         .map_err(|err| Error::Io(format!("开启广播失败: {err}")))?;

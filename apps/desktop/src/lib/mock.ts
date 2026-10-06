@@ -26,6 +26,7 @@ export const mockNetwork: NetworkStatus = {
   is_physical: true,
   direct_link: false,
   link_role: null,
+  address_problem: null,
   hint: '两台机器直连时，选这台是发送端还是接收端，软件会自动配好地址',
 };
 

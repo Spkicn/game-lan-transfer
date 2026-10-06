@@ -52,6 +52,8 @@ export interface NetworkStatus {
   direct_link: boolean;
   /** 本机在直连里的角色，未配置直连时为空 */
   link_role: LinkRole | null;
+  /** 直连地址当前不可用时的原因 */
+  address_problem: string | null;
   hint: string;
 }
 

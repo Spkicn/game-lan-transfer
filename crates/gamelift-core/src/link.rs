@@ -387,6 +387,49 @@ pub fn is_direct_link_ip(ip: &str) -> bool {
     ip.starts_with(&format!("{LINK_SUBNET_PREFIX}."))
 }
 
+/// 直连地址当前是否可用，可用时返回 `None`
+///
+/// Windows 给地址维护一个状态：`Preferred` 可用，`Duplicate` 表示同网段里
+/// 已有机器用同一个地址，多半是两台机器配成了同一个角色
+#[must_use]
+pub fn link_address_problem(ip: &str) -> Option<String> {
+    let script = format!(
+        "(Get-NetIPAddress -IPAddress {ip} -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -First 1).AddressState"
+    );
+    let state = run_powershell(&script).ok()?;
+    describe_address_state(state.trim())
+}
+
+/// 把地址状态翻成给用户看的话，可用时为 `None`
+#[must_use]
+pub fn describe_address_state(state: &str) -> Option<String> {
+    match state.trim() {
+        "" | "Preferred" => None,
+        "Tentative" => Some("地址还在做重复检测，稍等几秒再点「找对端」".to_owned()),
+        "Duplicate" => Some(
+            "地址冲突：同一网段里已有机器在用这个地址，多半两台都选成了同一个角色。把其中一台改成另一种角色即可"
+                .to_owned(),
+        ),
+        "Deprecated" | "Invalid" => Some("这个地址已失效，点「重新检测」，必要时重新选一次角色".to_owned()),
+        other => Some(format!("地址状态异常：{other}")),
+    }
+}
+
+/// 解析要使用的本机地址
+///
+/// 界面传进来的地址可能刚被改掉，先验它还在不在网卡上；不在就退回自动挑选
+#[must_use]
+pub fn resolve_local_ip(nics: &[Nic], explicit: Option<&str>) -> Option<String> {
+    if let Some(wanted) = explicit.filter(|value| !value.is_empty()) {
+        if wanted.parse::<std::net::IpAddr>().is_ok()
+            && nics.iter().any(|nic| nic.has_address(wanted))
+        {
+            return Some(wanted.to_owned());
+        }
+    }
+    preferred_ipv4(nics).map(|found| found.ip)
+}
+
 /// 目标盘剩余空间，单位字节；`drive` 接受 "C" 或 "C:\" 形式
 ///
 /// # Errors
@@ -473,6 +516,41 @@ mod tests {
         assert!(message.contains("找不到指定的接口"), "got {message}");
         assert!(!message.contains("FullyQualifiedErrorId"), "got {message}");
         assert!(message.len() <= 300);
+    }
+
+    #[test]
+    fn address_state_turns_into_actionable_text() {
+        assert_eq!(describe_address_state("Preferred"), None);
+        assert_eq!(describe_address_state(""), None);
+        let duplicate = describe_address_state("Duplicate").expect("duplicate");
+        assert!(duplicate.contains("同一个角色"), "got {duplicate}");
+        let tentative = describe_address_state("Tentative").expect("tentative");
+        assert!(tentative.contains("重复检测"), "got {tentative}");
+        assert!(describe_address_state("什么也不是").is_some());
+    }
+
+    #[test]
+    fn stale_explicit_address_falls_back_to_detection() {
+        let nics = vec![nic("以太网", true, Some("192.168.88.2"))];
+        assert_eq!(
+            resolve_local_ip(&nics, Some("192.168.88.2")).as_deref(),
+            Some("192.168.88.2")
+        );
+        // 界面上的地址已经被改掉了，不能拿它去 bind
+        assert_eq!(
+            resolve_local_ip(&nics, Some("192.168.88.1")).as_deref(),
+            Some("192.168.88.2")
+        );
+        assert_eq!(
+            resolve_local_ip(&nics, None).as_deref(),
+            Some("192.168.88.2")
+        );
+    }
+
+    #[test]
+    fn no_address_at_all_returns_none() {
+        let nics = vec![nic("WLAN", false, None)];
+        assert_eq!(resolve_local_ip(&nics, Some("192.168.88.1")), None);
     }
 
     #[test]

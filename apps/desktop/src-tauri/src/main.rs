@@ -463,6 +463,8 @@ struct NetworkStatus {
     direct_link: bool,
     /// 本机在直连里的角色，未配置直连时为空
     link_role: Option<String>,
+    /// 直连地址当前不可用时的原因，可用时为空
+    address_problem: Option<String>,
     /// 下一步提示
     hint: String,
 }
@@ -490,8 +492,14 @@ fn network_status() -> NetworkStatus {
             None
         }
     });
+    let address_problem = address
+        .as_deref()
+        .filter(|value| link_role.is_some() || link::is_direct_link_ip(value))
+        .and_then(link::link_address_problem);
     let hint = if address.is_none() {
         "没有可用的本机地址：先连上网络，再选这台机器是发送端还是接收端".to_owned()
+    } else if address_problem.is_some() {
+        "直连地址当前不可用，按下面的说明处理后重试".to_owned()
     } else if link_role.is_some() {
         "直连已就绪，插上网线就能与对端互通".to_owned()
     } else if is_physical {
@@ -514,6 +522,7 @@ fn network_status() -> NetworkStatus {
         is_physical,
         direct_link,
         link_role,
+        address_problem,
         hint,
     }
 }
@@ -1208,17 +1217,14 @@ fn startup_role() -> Option<String> {
 ///
 /// 本机没有可用地址或地址不可解析时返回说明
 fn local_ip(explicit: Option<&str>) -> Result<IpAddr, String> {
-    if let Some(text) = explicit.filter(|value| !value.is_empty()) {
-        return text
-            .parse()
-            .map_err(|_| format!("地址不合法: {text}，示例 192.168.88.1"));
-    }
-    let picked = link::preferred_ipv4(&link::list_nics())
-        .ok_or_else(|| "没有可用的本机地址，请先连上网络，或在界面里点「配置直连」".to_owned())?;
-    picked
-        .ip
+    let nics = link::list_nics();
+    // 界面上的地址可能刚被改掉，验活之后再拿去 bind
+    let Some(found) = link::resolve_local_ip(&nics, explicit) else {
+        return Err("没有可用的本机地址：确认网线插好，或点「重新检测」".to_owned());
+    };
+    found
         .parse()
-        .map_err(|_| format!("网口地址不合法: {}", picked.ip))
+        .map_err(|_| format!("网口地址不合法: {found}"))
 }
 
 /// 两个地址是否在同一个 /24 网段，用于提前拦住走不通的传输

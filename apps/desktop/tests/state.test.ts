@@ -160,6 +160,29 @@ describe('三阶段状态机', () => {
     expect(pickedPlatform(state)).toBeNull();
   });
 
+  it('已完成的传输会留在列表里，重复添加只留一条', () => {
+    const record = {
+      key: 'receive:1:demo',
+      name: 'demo',
+      bytes: 4096,
+      direction: 'receive' as const,
+      dest: 'E:\\Steam\\steamapps\\common',
+      at: 1,
+    };
+    let state = reduce(initialState, { type: 'history-add', records: [record] });
+    expect(state.history).toHaveLength(1);
+    state = reduce(state, { type: 'history-add', records: [record] });
+    expect(state.history).toHaveLength(1);
+    state = reduce(state, {
+      type: 'history-add',
+      records: [{ ...record, key: 'receive:1:other', name: 'other' }],
+    });
+    expect(state.history).toHaveLength(2);
+    expect(state.history[0]?.name).toBe('other');
+    state = reduce(state, { type: 'history-clear' });
+    expect(state.history).toHaveLength(0);
+  });
+
   it('诊断信息把当前状态一次说全', () => {
     let state = reduce(initialState, {
       type: 'network',

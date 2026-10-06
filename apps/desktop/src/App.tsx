@@ -2,7 +2,7 @@
 //
 // 界面只做渲染与状态推进，文件系统与网络全部交给 Rust 侧命令
 
-import { useCallback, useEffect, useReducer, useState } from 'react';
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import {
   ArrowUp,
   Check,
@@ -173,6 +173,32 @@ export default function App() {
     dispatch({ type: 'pending-role', role: null });
     applyRole(role);
   }, [state.pendingRole, state.elevated, applyRole]);
+
+  // 发送端跑完时把这一单记进传输列表，用 ref 保证只记一次
+  const recordedRef = useRef(false);
+  useEffect(() => {
+    if (state.role !== 'send') {
+      recordedRef.current = false;
+      return;
+    }
+    if (recordedRef.current || !transferComplete(state)) {
+      return;
+    }
+    recordedRef.current = true;
+    const dest = state.sendResult?.dest ?? '对端';
+    const stamp = Date.now();
+    dispatch({
+      type: 'history-add',
+      records: state.transferItems.map((item) => ({
+        key: `send:${item.name}:${item.bytes}:${stamp}`,
+        name: item.name,
+        bytes: item.bytes,
+        direction: 'send' as const,
+        dest,
+        at: stamp,
+      })),
+    });
+  }, [state]);
 
   const iface = state.network?.address ?? null;
   const pairing = state.pairing.trim().length > 0 ? state.pairing.trim() : null;
@@ -482,15 +508,21 @@ function PickStage({
       dispatch({ type: 'entries', entries });
     });
 
-  const enter = (entry: LocalEntry) =>
+  // 进目录与粘贴路径都走同一条路，避免两套逻辑
+  const browse = (path: string | null) =>
     run(async () => {
-      dispatch({ type: 'cwd', cwd: entry.path });
-      dispatch({ type: 'entries', entries: await api.listLocal(entry.path) });
+      dispatch({ type: 'cwd', cwd: path });
+      dispatch({ type: 'entries', entries: await api.listLocal(path) });
     });
 
-  const parent = state.cwd
-    ? state.cwd.replace(/[\\/][^\\/]*$/, '')
-    : null;
+  const enter = (entry: LocalEntry) => browse(entry.path);
+
+  // 盘符根本身就是最上层，它的上一层是盘符列表
+  const isDriveRoot = state.cwd !== null && /^[A-Za-z]:[\\/]?$/.test(state.cwd);
+  const parent =
+    state.cwd === null || isDriveRoot
+      ? null
+      : state.cwd.replace(/[\\/][^\\/]*$/, '');
 
   // 接收端不选内容，只等着发送端选好之后发来请求
   if ((state.network?.link_role ?? null) === 'receiver') {
@@ -541,21 +573,21 @@ function PickStage({
             <Button
               size="sm"
               variant="quiet"
-              disabled={!parent || state.busy}
-              onClick={() =>
-                void run(async () => {
-                  dispatch({ type: 'cwd', cwd: parent });
-                  dispatch({ type: 'entries', entries: await api.listLocal(parent) });
-                })
-              }
+              disabled={state.cwd === null || state.busy}
+              onClick={() => void browse(parent)}
             >
-              <ArrowUp className="size-3.5" /> 上层
+              <ArrowUp className="size-3.5" /> {isDriveRoot ? '盘符' : '上层'}
             </Button>
             <Input
               value={state.cwd ?? ''}
-              readOnly
               aria-label="当前目录"
-              placeholder="点「列出目录」从盘符开始，或点上层返回"
+              placeholder="点「列出目录」从盘符开始，或粘贴一个路径后回车"
+              onChange={(event) => dispatch({ type: 'cwd', cwd: event.target.value })}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  void browse(state.cwd);
+                }
+              }}
             />
           </div>
         ) : null}
@@ -788,6 +820,29 @@ function TransferStage({
           ) : null}
         </div>
       </section>
+
+      {state.history.length > 0 ? (
+        <section className="border border-panel-edge">
+          <header className="flex items-center justify-between gap-3 border-b border-panel-edge bg-panel-face px-4 py-2">
+            <span className="label">传输列表 · 已完成 {state.history.length} 项</span>
+            <Button size="sm" variant="quiet" onClick={() => dispatch({ type: 'history-clear' })}>
+              清除已完成
+            </Button>
+          </header>
+          <ul className="max-h-[30vh] overflow-y-auto">
+            {state.history.map((record) => (
+              <RailRow
+                key={record.key}
+                selected={false}
+                title={record.name}
+                meta={`${record.direction === 'send' ? '已发送' : '已接收'} · ${record.dest}`}
+                reading={formatBytes(record.bytes)}
+                state={<span className="label text-lamp-ready">已完成</span>}
+              />
+            ))}
+          </ul>
+        </section>
+      ) : null}
     </div>
   );
 }
@@ -1020,6 +1075,17 @@ function IncomingPanel({
                   state.destClaimRoot,
                 );
                 dispatch({ type: 'finished', summary });
+                dispatch({
+                  type: 'history-add',
+                  records: incoming.items.map((item) => ({
+                    key: `receive:${incoming.id}:${item.name}`,
+                    name: item.name,
+                    bytes: item.bytes,
+                    direction: 'receive' as const,
+                    dest,
+                    at: Date.now(),
+                  })),
+                });
                 dispatch({ type: 'notice', message: null });
               })
             }

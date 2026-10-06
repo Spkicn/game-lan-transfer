@@ -152,6 +152,20 @@ export interface DestPick {
   claimRoot: string | null;
 }
 
+/** 传输列表里一条已经完成的记录 */
+export interface TransferRecord {
+  /** 唯一键，重复添加时按它去重 */
+  key: string;
+  name: string;
+  bytes: number;
+  /** 这次是本机发送还是接收 */
+  direction: 'send' | 'receive';
+  /** 落到哪里 */
+  dest: string;
+  /** 完成时间，毫秒时间戳 */
+  at: number;
+}
+
 /** 界面状态 */
 export interface AppState {
   stage: Stage;
@@ -173,6 +187,8 @@ export interface AppState {
   incomingDest: string;
   /** 本机上的 Steam 库，接收端挑盘时用 */
   steamLibraries: SteamLibrary[];
+  /** 已经完成的传输，留在列表里直到用户清除 */
+  history: TransferRecord[];
   /** 接收端为目标目录选定的认领根，Steam 库时不是空 */
   destClaimRoot: string | null;
   /** 接收端浏览落盘位置时的当前目录 */
@@ -210,6 +226,7 @@ export const initialState: AppState = {
   incoming: null,
   incomingDest: '',
   steamLibraries: [],
+  history: [],
   destClaimRoot: null,
   destCwd: null,
   destEntries: [],
@@ -245,10 +262,8 @@ export type Action =
   | { type: 'incoming'; incoming: IncomingEvent | null }
   | { type: 'incoming-dest'; value: string }
   | { type: 'steam-libraries'; libraries: SteamLibrary[] }
-  | { type: 'dest-claim-root'; value: string | null }
-  | { type: 'dest-cwd'; value: string | null }
-  | { type: 'dest-entries'; entries: LocalEntry[] }
-  | { type: 'steam-libraries'; libraries: SteamLibrary[] }
+  | { type: 'history-add'; records: TransferRecord[] }
+  | { type: 'history-clear' }
   | { type: 'dest-claim-root'; value: string | null }
   | { type: 'dest-cwd'; value: string | null }
   | { type: 'dest-entries'; entries: LocalEntry[] }
@@ -306,6 +321,13 @@ export function reduce(state: AppState, action: Action): AppState {
       return { ...state, destCwd: action.value, busy: false };
     case 'dest-entries':
       return { ...state, destEntries: action.entries, busy: false };
+    case 'history-add': {
+      const known = new Set(state.history.map((record) => record.key));
+      const fresh = action.records.filter((record) => !known.has(record.key));
+      return fresh.length === 0 ? state : { ...state, history: [...fresh, ...state.history] };
+    }
+    case 'history-clear':
+      return { ...state, history: [] };
     case 'games':
       return { ...state, games: action.games, busy: false };
     case 'source':

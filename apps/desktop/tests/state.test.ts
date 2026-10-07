@@ -217,6 +217,16 @@ describe('三阶段状态机', () => {
     expect(parentPath('D:\\a\\b\\c')).toBe('D:\\a\\b');
   });
 
+  it('算出来的目录大小直接进总量，不必等回填', () => {
+    let state = reduce(initialState, {
+      type: 'toggle-pick',
+      path: 'D:/360Downloads/360驱动大师目录',
+      entry: { name: '360驱动大师目录', path: 'D:/360Downloads/360驱动大师目录', is_dir: true, bytes: 0 },
+    });
+    expect(pickedBytes(state)).toBe(0);
+    state = reduce(state, { type: 'sizes', sizes: { 'D:/360Downloads/360驱动大师目录': 138412032 } });
+    expect(pickedBytes(state)).toBe(138412032);
+  });
   it('同一台机器的多份广播合并成一条', () => {
     const merged = mergePeers([
       { name: 'MM', addr: peer.addr, session_port: 0, platform: '', free_bytes: 0 },

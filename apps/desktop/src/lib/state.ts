@@ -450,7 +450,11 @@ export function mergePeers(peers: PeerEntry[]): PeerEntry[] {
 /** 已选内容的总字节数 */
 export function pickedBytes(state: AppState): number {
   return state.picked.reduce((total, path) => {
-    // 记住选中时的条目，换目录之后也算得出总量
+    // 算出来的大小按路径存，直接以它为准；记录里的字节只是缓存
+    const sized = state.sizes[path];
+    if (sized !== undefined) {
+      return total + sized;
+    }
     const remembered = state.pickedMeta[path];
     if (remembered) {
       return total + remembered.bytes;

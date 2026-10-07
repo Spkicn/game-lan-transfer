@@ -732,7 +732,11 @@ function PickStage({
       <section className="flex min-w-0 flex-col gap-6">
         <div className="border border-panel-edge bg-panel-face px-4 py-3">
           <p className="label">待发清单</p>
-          <p className="reading mt-2 text-[22px]">{formatBytes(pickedBytes(state))}</p>
+          <p className="reading mt-2 text-[22px]">
+            {state.picked.length > 0 && pickedBytes(state) === 0
+              ? '待统计'
+              : formatBytes(pickedBytes(state))}
+          </p>
           <p className="text-[13px] text-ink-dim">
             共 {state.picked.length} 项 · 发给 {state.peer?.name ?? '未选择对端'}
             {pickedPlatform(state) ? ` · ${pickedPlatform(state)}` : ''}
@@ -750,7 +754,9 @@ function PickStage({
                 selectLabel={`移出 ${path}`}
                 title={path.split(/[\\/]/).pop() ?? path}
                 meta={path}
-                state={<X className="size-3.5 text-ink-faint" />}
+                state={
+                  <X className="size-3.5 text-ink-faint" aria-label="移出这一项" />
+                }
               />
             ))
           )}
@@ -1256,7 +1262,7 @@ function NextAction({
           {receiver
             ? '这是一台接收端，等发送端选好内容发过来'
             : state.picked.length > 0
-              ? `已选 ${state.picked.length} 项，${formatBytes(pickedBytes(state))}`
+              ? `已选 ${state.picked.length} 项，${pickedBytes(state) > 0 ? formatBytes(pickedBytes(state)) : '大小待统计'}`
               : '选要搬的游戏，或切到「文件夹」挑任意文件'}
         </span>
         <Button size="sm" variant="quiet" className="ml-auto" onClick={() => dispatch({ type: 'stage', stage: 'connect' })}>

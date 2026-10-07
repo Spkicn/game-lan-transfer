@@ -755,7 +755,15 @@ function PickStage({
                 title={path.split(/[\\/]/).pop() ?? path}
                 meta={path}
                 state={
-                  <X className="size-3.5 text-ink-faint" aria-label="移出这一项" />
+                  <Button
+                    size="sm"
+                    variant="quiet"
+                    aria-label={`移出 ${path}`}
+                    title="移出待发清单"
+                    onClick={() => dispatch({ type: 'toggle-pick', path })}
+                  >
+                    <X className="size-3.5" />
+                  </Button>
                 }
               />
             ))

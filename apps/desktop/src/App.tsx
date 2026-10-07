@@ -163,18 +163,13 @@ export default function App() {
     [run],
   );
 
-  // 目录大小按需在后台算，算好一个显示一个
+  // 只给选中的目录算大小：列目录时不扫盘，勾选之后才算
   const sizingRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     const wanted = new Map<string, true>();
     for (const path of state.picked) {
       if (state.pickedMeta[path]?.is_dir && state.sizes[path] === undefined) {
         wanted.set(path, true);
-      }
-    }
-    for (const entry of state.entries) {
-      if (entry.is_dir && entry.bytes === 0 && state.sizes[entry.path] === undefined) {
-        wanted.set(entry.path, true);
       }
     }
     const pending = [...wanted.keys()].filter((path) => !sizingRef.current.has(path)).slice(0, 30);
@@ -640,7 +635,7 @@ function DirBrowser({
                   ? `可用 ${formatBytes(entry.bytes)}`
                   : sizeOf?.(entry) !== undefined
                     ? formatBytes(sizeOf(entry) ?? 0)
-                    : '统计中'
+                    : '文件夹'
                 : formatBytes(entry.bytes)
             }
             state={entry.is_dir ? <FolderUp className="size-3.5 text-ink-faint" /> : null}

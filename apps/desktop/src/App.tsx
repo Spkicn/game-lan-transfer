@@ -26,6 +26,7 @@ import {
   diagnosticsText,
   initialState,
   mergePeers,
+  parentPath,
   pathSegments,
   pickedBytes,
   pickedItems,
@@ -533,10 +534,9 @@ function DirBrowser({
   onBrowse: (path: string | null) => void;
   onToggle: (entry: LocalEntry) => void;
 }) {
-  // 盘符根本身就是最上层，它的上一层是盘符列表
+  // 盘符根本没有上一层，再往上是盘符列表
   const isDriveRoot = current !== null && /^[A-Za-z]:[\\/]?$/.test(current);
-  const parent =
-    current === null || isDriveRoot ? null : current.replace(/[\\/][^\\/]*$/, '');
+  const parent = parentPath(current);
 
   return (
     <div className="flex min-w-0 flex-col">

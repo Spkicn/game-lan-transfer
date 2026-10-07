@@ -463,6 +463,21 @@ export function canAdvance(state: AppState): boolean {
   return false;
 }
 
+/** 上一级目录，到盘符根或盘符列表时返回空
+ *
+ * 去掉一段后只剩盘符时补回反斜杠：`D:` 在 Windows 里指该盘的当前目录，不是根
+ */
+export function parentPath(current: string | null): string | null {
+  if (current === null || /^[A-Za-z]:[\\/]?$/.test(current)) {
+    return null;
+  }
+  const trimmed = current.replace(/[\\/][^\\/]*$/, '');
+  if (trimmed.length === 0) {
+    return null;
+  }
+  return /^[A-Za-z]:$/.test(trimmed) ? `${trimmed}\\` : trimmed;
+}
+
 /** 正在等待对端回应的一笔请求 */
 export function awaitingIncoming(state: AppState): boolean {
   return state.incoming !== null;

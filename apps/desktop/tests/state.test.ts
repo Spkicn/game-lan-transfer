@@ -6,6 +6,7 @@ import {
   diagnosticsText,
   initialState,
   mergePeers,
+  parentPath,
   pathSegments,
   pickedBytes,
   pickedItems,
@@ -205,6 +206,15 @@ describe('三阶段状态机', () => {
       { label: 'Steam', path: 'D:\\Steam' },
       { label: 'steamapps', path: 'D:\\Steam\\steamapps' },
     ]);
+  });
+
+  it('上一级目录到盘符根时补反斜杠，不产生 D: 这种写法', () => {
+    expect(parentPath(null)).toBeNull();
+    expect(parentPath('D:\\')).toBeNull();
+    expect(parentPath('D:')).toBeNull();
+    expect(parentPath('D:\\Games')).toBe('D:\\');
+    expect(parentPath('D:\\Games\\demo')).toBe('D:\\Games');
+    expect(parentPath('D:\\a\\b\\c')).toBe('D:\\a\\b');
   });
 
   it('同一台机器的多份广播合并成一条', () => {

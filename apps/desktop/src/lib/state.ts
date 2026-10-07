@@ -217,6 +217,8 @@ export interface AppState {
   steamLibraries: SteamLibrary[];
   /** 选中时记下的条目，换目录后仍算得出大小 */
   pickedMeta: Record<string, LocalEntry>;
+  /** 按需算出来的目录大小，按路径存 */
+  sizes: Record<string, number>;
   /** 已经完成的传输，留在列表里直到用户清除 */
   history: TransferRecord[];
   /** 接收端为目标目录选定的认领根，Steam 库时不是空 */
@@ -258,6 +260,7 @@ export const initialState: AppState = {
   steamLibraries: [],
   history: [],
   pickedMeta: {},
+  sizes: {},
   destClaimRoot: null,
   destCwd: null,
   destEntries: [],
@@ -301,6 +304,7 @@ export type Action =
   | { type: 'games'; games: GameEntry[] }
   | { type: 'source'; source: PickSource }
   | { type: 'toggle-pick'; path: string; entry?: LocalEntry }
+  | { type: 'sizes'; sizes: Record<string, number> }
   | { type: 'clear-picks' }
   | { type: 'cwd'; cwd: string | null }
   | { type: 'entries'; entries: LocalEntry[] }
@@ -375,6 +379,19 @@ export function reduce(state: AppState, action: Action): AppState {
         pickedMeta[action.path] = action.entry;
       }
       return { ...state, picked, pickedMeta };
+    }
+    case 'sizes': {
+      const sizes = { ...state.sizes, ...action.sizes };
+      // 选中过的目录把算出来的大小补进记录，待发清单的总量才对
+      const pickedMeta = { ...state.pickedMeta };
+      for (const path of state.picked) {
+        const size = sizes[path];
+        const meta = pickedMeta[path];
+        if (size !== undefined && meta) {
+          pickedMeta[path] = { ...meta, bytes: size };
+        }
+      }
+      return { ...state, sizes, pickedMeta };
     }
     case 'clear-picks':
       return { ...state, picked: [], pickedMeta: {} };

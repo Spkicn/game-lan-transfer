@@ -1206,6 +1206,7 @@ fn main() {
             relaunch_elevated,
             startup_role,
             app_version,
+            dir_size,
             steam_libraries,
             list_local,
             start_listen,
@@ -1219,6 +1220,12 @@ fn main() {
         eprintln!("启动 GameLift 失败: {err}");
         std::process::exit(1);
     }
+}
+
+/// 目录大小，挑选时按需算，不塞进目录列举
+#[tauri::command(async)]
+fn dir_size(path: String) -> u64 {
+    gamelift_core::size::dir_size(Path::new(&path))
 }
 
 /// 当前程序版本，诊断信息里带上

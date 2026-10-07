@@ -273,6 +273,14 @@ export function onProgress(handler: (payload: Progress) => void): Promise<Unlist
   });
 }
 
+/** 目录大小，挑选时按需算 */
+export function dirSize(path: string): Promise<number> {
+  if (MOCK) {
+    return mock(64 * 1024 ** 2, 300);
+  }
+  return invoke<number>('dir_size', { path });
+}
+
 /** 订阅常驻发现推来的对端列表 */
 export function onPeers(handler: (peers: PeerEntry[]) => void): Promise<UnlistenFn> {
   if (MOCK) {

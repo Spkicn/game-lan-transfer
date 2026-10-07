@@ -163,6 +163,46 @@ export default function App() {
     [run],
   );
 
+  // 目录大小按需在后台算，算好一个显示一个
+  const sizingRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const wanted = new Map<string, true>();
+    for (const path of state.picked) {
+      if (state.pickedMeta[path]?.is_dir && state.sizes[path] === undefined) {
+        wanted.set(path, true);
+      }
+    }
+    for (const entry of state.entries) {
+      if (entry.is_dir && entry.bytes === 0 && state.sizes[entry.path] === undefined) {
+        wanted.set(entry.path, true);
+      }
+    }
+    const pending = [...wanted.keys()].filter((path) => !sizingRef.current.has(path)).slice(0, 30);
+    if (pending.length === 0) {
+      return;
+    }
+    let alive = true;
+    void (async () => {
+      for (const path of pending) {
+        if (!alive) {
+          return;
+        }
+        sizingRef.current.add(path);
+        try {
+          const bytes = await api.dirSize(path);
+          if (alive) {
+            dispatch({ type: 'sizes', sizes: { [path]: bytes } });
+          }
+        } catch {
+          // 算不出来就保持未知，不影响挑选
+        }
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [state.entries, state.sizes, state.picked, state.pickedMeta]);
+
   // 起手就把广播与请求端口挂上：对端上线几秒内自己出现，不用反复按
   const listenedFor = useRef<string | null>(null);
   useEffect(() => {
@@ -520,6 +560,7 @@ function DirBrowser({
   current,
   entries,
   isSelected,
+  sizeOf,
   emptyHint,
   onEdit,
   onBrowse,
@@ -529,6 +570,7 @@ function DirBrowser({
   current: string | null;
   entries: LocalEntry[];
   isSelected: (entry: LocalEntry) => boolean;
+  sizeOf?: (entry: LocalEntry) => number | undefined;
   emptyHint: string;
   onEdit: (value: string) => void;
   onBrowse: (path: string | null) => void;
@@ -596,7 +638,9 @@ function DirBrowser({
               entry.is_dir
                 ? current === null && entry.bytes > 0
                   ? `可用 ${formatBytes(entry.bytes)}`
-                  : '文件夹'
+                  : sizeOf?.(entry) !== undefined
+                    ? formatBytes(sizeOf(entry) ?? 0)
+                    : '统计中'
                 : formatBytes(entry.bytes)
             }
             state={entry.is_dir ? <FolderUp className="size-3.5 text-ink-faint" /> : null}
@@ -691,6 +735,7 @@ function PickStage({
             current={state.cwd}
             entries={state.entries}
             isSelected={(entry) => state.picked.includes(entry.path)}
+            sizeOf={(entry) => state.sizes[entry.path]}
             emptyHint="这一层没有可选项，点「上层」返回，或点「盘符」换一个盘"
             onEdit={(value) => dispatch({ type: 'cwd', cwd: value })}
             onBrowse={(path) => void browse(path)}
@@ -733,8 +778,10 @@ function PickStage({
         <div className="border border-panel-edge bg-panel-face px-4 py-3">
           <p className="label">待发清单</p>
           <p className="reading mt-2 text-[22px]">
-            {state.picked.length > 0 && pickedBytes(state) === 0
-              ? '待统计'
+            {state.picked.some(
+              (path) => state.pickedMeta[path]?.is_dir && state.sizes[path] === undefined,
+            )
+              ? '统计中'
               : formatBytes(pickedBytes(state))}
           </p>
           <p className="text-[13px] text-ink-dim">
@@ -1270,7 +1317,7 @@ function NextAction({
           {receiver
             ? '这是一台接收端，等发送端选好内容发过来'
             : state.picked.length > 0
-              ? `已选 ${state.picked.length} 项，${pickedBytes(state) > 0 ? formatBytes(pickedBytes(state)) : '大小待统计'}`
+              ? `已选 ${state.picked.length} 项，${state.picked.some((path) => state.pickedMeta[path]?.is_dir && state.sizes[path] === undefined) ? '统计中' : formatBytes(pickedBytes(state))}`
               : '选要搬的游戏，或切到「文件夹」挑任意文件'}
         </span>
         <Button size="sm" variant="quiet" className="ml-auto" onClick={() => dispatch({ type: 'stage', stage: 'connect' })}>

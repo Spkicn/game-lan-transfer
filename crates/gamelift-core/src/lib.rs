@@ -7,6 +7,7 @@ pub mod link;
 pub mod manifest;
 pub mod net;
 pub mod shell;
+pub mod size;
 pub mod transfer;
 
 /// crate 级错误类型，库 crate 一律用 thiserror 且禁止跨边界传 String

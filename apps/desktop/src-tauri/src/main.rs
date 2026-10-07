@@ -807,7 +807,8 @@ fn start_listen(
         instance: local_instance(),
         name: discovery::local_name(),
         addr: ip,
-        session_port: 0,
+        // 端口固定，广告内容必须与开始发送时那份一致，否则同一台机器会出两条
+        session_port: net::DEFAULT_SESSION_PORT,
         platform: discovery::local_platform(),
         free_bytes: 0,
         pairing_required: code.is_some(),

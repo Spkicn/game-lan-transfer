@@ -5,6 +5,7 @@ import {
   connected,
   diagnosticsText,
   initialState,
+  mergePeers,
   pathSegments,
   pickedBytes,
   pickedItems,
@@ -204,6 +205,18 @@ describe('三阶段状态机', () => {
       { label: 'Steam', path: 'D:\\Steam' },
       { label: 'steamapps', path: 'D:\\Steam\\steamapps' },
     ]);
+  });
+
+  it('同一台机器的多份广播合并成一条', () => {
+    const merged = mergePeers([
+      { name: 'MM', addr: peer.addr, session_port: 0, platform: '', free_bytes: 0 },
+      peer,
+    ]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.session_port).toBe(peer.session_port);
+    expect(merged[0]?.free_bytes).toBe(peer.free_bytes);
+    expect(merged[0]?.name).toBe('MM');
+    expect(mergePeers([peer, { ...peer, addr: '192.168.88.3' }])).toHaveLength(2);
   });
 
   it('已完成的传输会留在列表里，重复添加只留一条', () => {

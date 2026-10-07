@@ -25,6 +25,7 @@ import {
   connected,
   diagnosticsText,
   initialState,
+  mergePeers,
   pathSegments,
   pickedBytes,
   pickedItems,
@@ -59,7 +60,7 @@ export default function App() {
       .onProgress((progress) => dispatch({ type: 'progress', progress }))
       .then((off) => (alive ? offs.push(off) : off()));
     void api
-      .onPeers((peers) => dispatch({ type: 'peers', peers }))
+      .onPeers((peers) => dispatch({ type: 'peers', peers: mergePeers(peers) }))
       .then((off) => (alive ? offs.push(off) : off()));
     void api
       .onRequest((incoming) => {

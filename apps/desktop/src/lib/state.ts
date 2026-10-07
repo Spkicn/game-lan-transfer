@@ -409,6 +409,27 @@ export function reduce(state: AppState, action: Action): AppState {
   }
 }
 
+/** 同一台机器的广播可能来好几份，按地址合并并保留信息更全的那份 */
+export function mergePeers(peers: PeerEntry[]): PeerEntry[] {
+  const byAddr = new Map<string, PeerEntry>();
+  for (const peer of peers) {
+    const kept = byAddr.get(peer.addr);
+    byAddr.set(
+      peer.addr,
+      kept
+        ? {
+            ...kept,
+            name: kept.name || peer.name,
+            platform: kept.platform || peer.platform,
+            session_port: Math.max(kept.session_port, peer.session_port),
+            free_bytes: Math.max(kept.free_bytes, peer.free_bytes),
+          }
+        : peer,
+    );
+  }
+  return [...byAddr.values()];
+}
+
 /** 已选内容的总字节数 */
 export function pickedBytes(state: AppState): number {
   return state.picked.reduce((total, path) => {

@@ -810,7 +810,10 @@ fn start_listen(
         // 端口固定，广告内容必须与开始发送时那份一致，否则同一台机器会出两条
         session_port: net::DEFAULT_SESSION_PORT,
         platform: discovery::local_platform(),
-        free_bytes: 0,
+        // 广告里带的是本机还能收多少：取默认落盘盘符的可用空间，取不到就留 0
+        free_bytes: default_dest()
+            .and_then(|path| link::free_bytes_at(Path::new(&path)).ok())
+            .unwrap_or(0),
         pairing_required: code.is_some(),
     };
     spawn_announcer(ip, peer, Arc::clone(&announce))?;

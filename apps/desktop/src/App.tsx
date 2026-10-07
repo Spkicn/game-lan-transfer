@@ -449,7 +449,9 @@ function ConnectStage({
                 selectLabel={`接上 ${entry.name}`}
                 title={entry.name}
                 meta={`${entry.addr}:${entry.session_port}`}
-                reading={entry.free_bytes > 0 ? `可用 ${formatBytes(entry.free_bytes)}` : '空间未知'}
+                reading={
+                  entry.free_bytes > 0 ? `可用 ${formatBytes(entry.free_bytes)}` : '可接收'
+                }
               />
             ))}
           </ul>

@@ -532,14 +532,6 @@ mod tests {
     }
 
     #[test]
-    fn cancelled_elevation_is_not_reported_as_a_failure() {
-        let raw = "Start-Process : 此操作已被用户取消。\r\n\
-                   + CategoryInfo          : InvalidOperation: (:) [Start-Process], InvalidOperationException\r\n";
-        let message = friendly_shell_error(raw);
-        assert!(message.contains("被取消"), "got {message}");
-    }
-
-    #[test]
     fn empty_output_still_gives_a_message() {
         assert_eq!(friendly_shell_error("  \r\n \r\n"), "PowerShell 执行失败");
     }

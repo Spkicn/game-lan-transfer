@@ -17,21 +17,47 @@ pub trait RegistryRead {
     fn values(&self, key: &str) -> ValueMap;
 }
 
-/// 真机实现，通过 `reg query` 读取，避免为一次读表引入依赖
+/// 真机实现，用 winreg 直接读注册表，不再起 `reg query`
+#[cfg(windows)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WindowsRegistry;
 
+#[cfg(windows)]
 impl RegistryRead for WindowsRegistry {
     fn subkeys(&self, key: &str) -> Vec<String> {
-        query(key)
-            .map(|table| table.keys().cloned().collect())
-            .unwrap_or_default()
+        let Some(opened) = open(key) else {
+            return Vec::new();
+        };
+        let mut names: Vec<String> = opened.enum_keys().flatten().collect();
+        names.sort();
+        names
     }
 
     fn values(&self, key: &str) -> ValueMap {
-        query(key)
-            .and_then(|mut table| table.remove(key))
-            .unwrap_or_default()
+        let Some(opened) = open(key) else {
+            return ValueMap::new();
+        };
+        let mut out = ValueMap::new();
+        for (name, value) in opened.enum_values().flatten() {
+            out.insert(name, format_value(&value));
+        }
+        out
+    }
+}
+
+/// 非 Windows 平台没有注册表
+#[cfg(not(windows))]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WindowsRegistry;
+
+#[cfg(not(windows))]
+impl RegistryRead for WindowsRegistry {
+    fn subkeys(&self, _key: &str) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn values(&self, _key: &str) -> ValueMap {
+        ValueMap::new()
     }
 }
 
@@ -67,60 +93,90 @@ impl RegistryRead for MapRegistry {
     }
 }
 
-/// 调用 `reg query` 并把输出解析成键到值的映射
-fn query(key: &str) -> Option<BTreeMap<String, ValueMap>> {
-    let output = gamelift_core::shell::hidden_command("reg")
-        .args(["query", key, "/s"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
+/// 打开 `HIVE\子键` 形式的键，短写与长写都认
+#[cfg(windows)]
+fn open(key: &str) -> Option<winreg::RegKey> {
+    use winreg::enums::{
+        HKEY_CLASSES_ROOT, HKEY_CURRENT_CONFIG, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, HKEY_USERS,
+        KEY_READ,
+    };
+    use winreg::RegKey;
+
+    let (hive, rest) = key.split_once('\\').unwrap_or((key, ""));
+    let root = match hive.to_ascii_uppercase().as_str() {
+        "HKLM" | "HKEY_LOCAL_MACHINE" => RegKey::predef(HKEY_LOCAL_MACHINE),
+        "HKCU" | "HKEY_CURRENT_USER" => RegKey::predef(HKEY_CURRENT_USER),
+        "HKCR" | "HKEY_CLASSES_ROOT" => RegKey::predef(HKEY_CLASSES_ROOT),
+        "HKU" | "HKEY_USERS" => RegKey::predef(HKEY_USERS),
+        "HKCC" | "HKEY_CURRENT_CONFIG" => RegKey::predef(HKEY_CURRENT_CONFIG),
+        _ => return None,
+    };
+    if rest.is_empty() {
+        return Some(root);
     }
-    let text = String::from_utf8_lossy(&output.stdout);
-    Some(parse(&text))
+    root.open_subkey_with_flags(rest, KEY_READ).ok()
 }
 
-/// 解析 `reg query /s` 的输出
-///
-/// 段落以 `HKEY_` 开头的行切分，段内每行是「值名 + 类型 + 值」，
-/// 三者之间用空白分隔；值本身可能含空格，因此只切前两段
-#[must_use]
-pub fn parse(text: &str) -> BTreeMap<String, ValueMap> {
-    let mut out: BTreeMap<String, ValueMap> = BTreeMap::new();
-    let mut current: Option<String> = None;
-    for raw in text.lines() {
-        let line = raw.trim_end();
-        if line.trim().is_empty() {
-            continue;
+/// 把注册表值转成字符串，与 `reg query` 的显示保持一致
+#[cfg(windows)]
+fn format_value(value: &winreg::RegValue) -> String {
+    use std::fmt::Write as _;
+    use winreg::enums::RegType;
+    match value.vtype {
+        RegType::REG_SZ | RegType::REG_EXPAND_SZ => decode_wide(&value.bytes),
+        RegType::REG_MULTI_SZ => wide_units(&value.bytes)
+            .split(|unit| *unit == 0)
+            .filter(|part| !part.is_empty())
+            .map(String::from_utf16_lossy)
+            .collect::<Vec<String>>()
+            .join(" / "),
+        RegType::REG_DWORD => u32::from_le_bytes(
+            value
+                .bytes
+                .get(..4)
+                .and_then(|slice| slice.try_into().ok())
+                .unwrap_or([0; 4]),
+        )
+        .to_string(),
+        RegType::REG_QWORD => u64::from_le_bytes(
+            value
+                .bytes
+                .get(..8)
+                .and_then(|slice| slice.try_into().ok())
+                .unwrap_or([0; 8]),
+        )
+        .to_string(),
+        RegType::REG_BINARY => {
+            let mut hex = String::with_capacity(value.bytes.len() * 2);
+            for byte in &value.bytes {
+                let _ = write!(hex, "{byte:02x}");
+            }
+            hex
         }
-        if line.starts_with("HKEY_") {
-            current = Some(line.trim().to_owned());
-            out.entry(line.trim().to_owned()).or_default();
-            continue;
-        }
-        let Some(key) = current.as_ref() else {
-            continue;
-        };
-        let trimmed = line.trim();
-        let mut words = trimmed.split_whitespace();
-        let (Some(name), Some(kind)) = (words.next(), words.next()) else {
-            continue;
-        };
-        if !kind.starts_with("REG_") {
-            continue;
-        }
-        // 值从类型之后开始，内部空格属于值本身
-        let after_name = trimmed.get(name.len()..).unwrap_or_default().trim_start();
-        let value = after_name
-            .get(kind.len()..)
-            .unwrap_or_default()
-            .trim_start()
-            .to_owned();
-        out.entry(key.clone())
-            .or_default()
-            .insert(name.to_owned(), value);
+        _ => String::new(),
     }
-    out
+}
+
+/// UTF-16 小端字节流转 u16 序列
+#[cfg(windows)]
+fn wide_units(bytes: &[u8]) -> Vec<u16> {
+    let mut units = Vec::with_capacity(bytes.len() / 2);
+    let mut index = 0;
+    while index + 1 < bytes.len() {
+        units.push(u16::from_le_bytes([bytes[index], bytes[index + 1]]));
+        index += 2;
+    }
+    units
+}
+
+/// UTF-16 小端字节流转字符串，去掉结尾的 NUL
+#[cfg(windows)]
+fn decode_wide(bytes: &[u8]) -> String {
+    let mut units = wide_units(bytes);
+    if let Some(end) = units.iter().position(|unit| *unit == 0) {
+        units.truncate(end);
+    }
+    String::from_utf16_lossy(&units)
 }
 
 #[cfg(test)]
@@ -128,6 +184,7 @@ pub fn parse(text: &str) -> BTreeMap<String, ValueMap> {
 mod tests {
     use super::*;
 
+    #[allow(dead_code)]
     const SAMPLE: &str = "\r
 HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\GOG.com\\Games\\1207658691\r
     gameName    REG_SZ    Example Quest\r
@@ -140,33 +197,33 @@ HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\GOG.com\\Games\\1207658692\r
 ";
 
     #[test]
-    fn parses_sections_and_values() {
-        let table = parse(SAMPLE);
-        assert_eq!(table.len(), 2);
-        let first = table
-            .get("HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\GOG.com\\Games\\1207658691")
-            .expect("first key");
-        assert_eq!(
-            first.get("gameName").map(String::as_str),
-            Some("Example Quest")
+    #[cfg(windows)]
+    fn native_registry_reads_a_well_known_key() {
+        // 真机实现此前没有测试盯着，子键语义与测试替身不一致却一直没人发现
+        let registry = WindowsRegistry;
+        let key = "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
+        let values = registry.values(key);
+        assert!(
+            values.contains_key("ProductName"),
+            "读不到 ProductName：{values:?}"
         );
-        assert_eq!(
-            first.get("path").map(String::as_str),
-            Some("D:\\GOG Games\\Example Quest")
+        assert_ne!(values.get("ProductName").map_or(0, String::len), 0);
+        // 子键名必须是名字，不带路径，适配器拿它再拼下一级
+        let children = registry.subkeys(key);
+        assert!(
+            children.iter().all(|name| !name.contains('\\')),
+            "子键名不该带路径：{children:?}"
         );
-        assert_eq!(first.get("buildId").map(String::as_str), Some("54321"));
     }
 
     #[test]
-    fn keeps_values_with_spaces_intact() {
-        let table = parse(SAMPLE);
-        let second = table
-            .get("HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\GOG.com\\Games\\1207658692")
-            .expect("second key");
-        assert_eq!(
-            second.get("gameName").map(String::as_str),
-            Some("Second Game")
-        );
+    #[cfg(windows)]
+    fn unknown_hive_or_key_is_empty_not_a_panic() {
+        let registry = WindowsRegistry;
+        assert_eq!(registry.subkeys("NOPE\\SOFTWARE").len(), 0);
+        assert!(registry
+            .values("HKCU\\SOFTWARE\\gamelift-not-there")
+            .is_empty());
     }
 
     #[test]

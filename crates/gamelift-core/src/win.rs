@@ -12,8 +12,10 @@ use std::os::windows::ffi::OsStringExt;
 
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::NetworkManagement::IpHelper::{
-    GetAdaptersAddresses, GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER, GAA_FLAG_SKIP_MULTICAST,
-    GET_ADAPTERS_ADDRESSES_FLAGS, IP_ADAPTER_ADDRESSES_LH,
+    CreateUnicastIpAddressEntry, DeleteUnicastIpAddressEntry, GetAdaptersAddresses,
+    InitializeUnicastIpAddressEntry, GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER,
+    GAA_FLAG_SKIP_MULTICAST, GET_ADAPTERS_ADDRESSES_FLAGS, IP_ADAPTER_ADDRESSES_LH,
+    MIB_UNICASTIPADDRESS_ROW,
 };
 use windows::Win32::Networking::WinSock::{AF_INET, AF_UNSPEC, SOCKADDR_IN};
 use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
@@ -199,7 +201,73 @@ pub fn relaunch_as_admin(exe: &std::path::Path, args: &[&str]) -> Result<(), Str
     Err(format!("以管理员身份启动失败，错误码 {code}"))
 }
 
+/// 给指定网卡加一个静态 IPv4 地址
+///
+/// # Errors
+///
+/// 网卡不存在、未以管理员运行或地址已存在时返回可读说明
+pub fn add_static_ipv4(
+    adapter_name: &str,
+    address: Ipv4Addr,
+    prefix_len: u8,
+) -> Result<(), String> {
+    let row = address_row(adapter_name, address, prefix_len)?;
+    let code = unsafe { CreateUnicastIpAddressEntry(std::ptr::addr_of!(row)) }.0;
+    match code {
+        0 => Ok(()),
+        183 => Err(format!("地址 {address} 已经在这块网卡上，无需重复配置")),
+        5 => Err("需要管理员权限：以管理员身份运行后再配直连".to_owned()),
+        other => Err(format!("添加地址 {address} 失败，错误码 {other}")),
+    }
+}
+
+/// 从指定网卡上摘掉一个 IPv4 地址
+///
+/// # Errors
+///
+/// 网卡不存在、未以管理员运行或地址本来就不在时返回可读说明
+pub fn remove_static_ipv4(
+    adapter_name: &str,
+    address: Ipv4Addr,
+    prefix_len: u8,
+) -> Result<(), String> {
+    let row = address_row(adapter_name, address, prefix_len)?;
+    let code = unsafe { DeleteUnicastIpAddressEntry(std::ptr::addr_of!(row)) }.0;
+    match code {
+        0 | 1168 => Ok(()), // 1168 是本来就没有，按已达成处理
+        5 => Err("需要管理员权限：以管理员身份运行后再还原网络设置".to_owned()),
+        other => Err(format!("移除地址 {address} 失败，错误码 {other}")),
+    }
+}
+
+/// 组装一条静态地址记录，Win32 靠它定位网卡与地址
+#[allow(clippy::cast_ptr_alignment)]
+fn address_row(
+    adapter_name: &str,
+    address: Ipv4Addr,
+    prefix_len: u8,
+) -> Result<MIB_UNICASTIPADDRESS_ROW, String> {
+    let adapter = adapters()
+        .into_iter()
+        .find(|item| item.name == adapter_name)
+        .ok_or_else(|| format!("没有找到网卡 {adapter_name}"))?;
+    if adapter.luid == 0 {
+        return Err(format!("网卡 {adapter_name} 没有可用的接口标识"));
+    }
+    let mut row = MIB_UNICASTIPADDRESS_ROW::default();
+    unsafe {
+        InitializeUnicastIpAddressEntry(std::ptr::addr_of_mut!(row));
+        row.InterfaceLuid.Value = adapter.luid;
+        row.OnLinkPrefixLength = prefix_len;
+        row.Address.si_family = AF_INET;
+        row.Address.Ipv4.sin_family = AF_INET;
+        row.Address.Ipv4.sin_addr.S_un.S_addr = u32::from_ne_bytes(address.octets());
+    }
+    Ok(row)
+}
+
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     use super::*;
 
@@ -229,6 +297,33 @@ mod tests {
             list.iter().any(|adapter| adapter.luid != 0),
             "所有网卡的 LUID 都是零：{list:?}"
         );
+    }
+
+    #[test]
+    fn adding_an_address_without_admin_is_refused_clearly() {
+        // 本会话不是管理员，这条正好覆盖"未提权时报错清晰"这一半
+        if is_elevated() {
+            return;
+        }
+        let Some(adapter) = adapters().into_iter().find(|item| item.is_physical) else {
+            return;
+        };
+        // 192.0.2.0/24 是文档专用网段，真机上不会被占用
+        let address: Ipv4Addr = "192.0.2.7".parse().expect("ip");
+        let outcome = add_static_ipv4(&adapter.name, address, 24);
+        let Err(message) = outcome else {
+            panic!("未提权却配置成功，说明这条路径绕过了权限检查");
+        };
+        assert!(message.contains("管理员"), "错误信息该说明权限：{message}");
+    }
+
+    #[test]
+    fn unknown_adapter_is_reported_by_name() {
+        let outcome = add_static_ipv4("gamelift-no-such-nic", "192.0.2.8".parse().expect("ip"), 24);
+        let Err(message) = outcome else {
+            panic!("不存在的网卡不该配置成功");
+        };
+        assert!(message.contains("没有找到"), "got {message}");
     }
 
     #[test]

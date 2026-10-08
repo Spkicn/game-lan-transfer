@@ -291,9 +291,15 @@ pub fn revert_direct_link(host_octet: u8) -> Result<()> {
         }
         touched += 1;
         let safe_name = nic.name.replace('\'', "''");
+        let address: std::net::Ipv4Addr = ip
+            .parse()
+            .map_err(|_| Error::Shell(format!("地址不合法: {ip}")))?;
+        if let Err(err) = crate::win::remove_static_ipv4(&nic.name, address, 24) {
+            last_err = err;
+        }
+        // 恢复 DHCP 要走 IP 接口表，没有等价的普通 API，保留这一条窄脚本
         let script = format!(
-            "Remove-NetIPAddress -InterfaceAlias '{safe_name}' -IPAddress {ip} -Confirm:$false -ErrorAction SilentlyContinue; \
-             Set-NetIPInterface -InterfaceAlias '{safe_name}' -Dhcp Enabled -ErrorAction SilentlyContinue"
+            "Set-NetIPInterface -InterfaceAlias '{safe_name}' -Dhcp Enabled -ErrorAction SilentlyContinue"
         );
         if let Err(err) = run_powershell(&script) {
             last_err = err.to_string();

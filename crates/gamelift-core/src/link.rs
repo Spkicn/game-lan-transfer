@@ -117,23 +117,13 @@ pub fn friendly_shell_error(raw: &str) -> String {
     trimmed.chars().take(300).collect()
 }
 
-/// 提权探测脚本，必须写成一整行
-///
-/// 用续行拼接会在 `)` 与 `.IsInRole` 之间留下空格，PowerShell 会直接解析失败，
-/// 于是任何权限都被判成未提权
-const ELEVATION_PROBE: &str = "(([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))";
-
 /// 当前进程是否以管理员身份运行，结果缓存
 ///
-/// 探测失败时返回 `None`，调用方不要据此拦截操作
+/// 走 Win32 取令牌，不再起脚本：脚本没有编译期检查，拼错一次就长期误判
 #[must_use]
 pub fn elevation_state() -> Option<bool> {
-    static STATE: std::sync::OnceLock<Option<bool>> = std::sync::OnceLock::new();
-    *STATE.get_or_init(|| {
-        run_powershell(ELEVATION_PROBE)
-            .ok()
-            .map(|text| text.trim().eq_ignore_ascii_case("true"))
-    })
+    static STATE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    Some(*STATE.get_or_init(crate::win::is_elevated))
 }
 
 /// 是否以管理员身份运行
@@ -148,62 +138,38 @@ pub fn is_elevated() -> bool {
 pub const ELEVATION_HINT: &str =
     "需要管理员权限：关闭本窗口，右键 GameLift 选择「以管理员身份运行」后再试";
 
-/// 罗列所有网口，单次 PowerShell 调用取齐名称、描述与全部 IPv4
-/// 输出编码显式设为 UTF-8，避免中文 Windows 控制台乱码
+/// 罗列所有网口，走 Win32 原生枚举
+///
+/// 名称、描述与地址一次取齐，链路本地与回环地址照旧排除
 #[must_use]
 pub fn list_nics() -> Vec<Nic> {
-    let ps = "[Console]::OutputEncoding=[Text.Encoding]::UTF8; \
-              Get-NetAdapter | ForEach-Object { \
-                $n=$_.Name; \
-                $ips=(Get-NetIPAddress -InterfaceAlias $n -AddressFamily IPv4 -ErrorAction SilentlyContinue \
-                     | Where-Object { $_.IPAddress -notlike '169.254*' -and $_.IPAddress -notlike '127.*' } \
-                     | ForEach-Object { $_.IPAddress }) -join ','; \
-                '{0}|{1}|{2}' -f $n, $_.InterfaceDescription, $ips \
-              }";
-    let output = crate::shell::hidden_command("powershell")
-        .args(["-NoProfile", "-Command", ps])
-        .output();
-    let Ok(out) = output else { return Vec::new() };
-    if !out.status.success() {
-        return Vec::new();
-    }
-    let text = String::from_utf8_lossy(&out.stdout);
-    let mut nics = Vec::new();
-    for line in text.lines() {
-        let Some((name, desc, addresses)) = split_nic_line(line) else {
-            continue;
-        };
-        if name.is_empty() {
-            continue;
-        }
-        let current_ipv4 = addresses.first().cloned();
-        nics.push(Nic {
-            current_ipv4,
-            all_ipv4: addresses,
-            is_physical: is_physical_ethernet(&name, &desc),
-            description: desc,
-            name,
-        });
-    }
-    nics
-}
-
-/// 拆 `名称|描述|地址表` 行，最后一段是逗号分隔的 IPv4 列表，允许为空
-/// 描述若含 `|`，靠 rsplitn 保证地址仍取最后一段
-fn split_nic_line(line: &str) -> Option<(String, String, Vec<String>)> {
-    let (head, ips_raw) = line.rsplit_once('|')?;
-    let (name_raw, desc_raw) = head.split_once('|')?;
-    let addresses = ips_raw
-        .split(',')
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-        .collect();
-    Some((
-        name_raw.trim().to_owned(),
-        desc_raw.trim().to_owned(),
-        addresses,
-    ))
+    crate::win::adapters()
+        .into_iter()
+        .map(|adapter| {
+            let usable = |ip: &std::net::Ipv4Addr| {
+                let text = ip.to_string();
+                !text.starts_with("169.254.") && !text.starts_with("127.")
+            };
+            let all_ipv4: Vec<String> = adapter
+                .ipv4
+                .iter()
+                .filter(|(ip, _)| usable(ip))
+                .map(|(ip, _)| ip.to_string())
+                .collect();
+            let preferred = adapter
+                .ipv4
+                .iter()
+                .find(|(ip, state)| usable(ip) && *state == crate::win::DAD_PREFERRED)
+                .map(|(ip, _)| ip.to_string());
+            Nic {
+                current_ipv4: preferred.or_else(|| all_ipv4.first().cloned()),
+                all_ipv4,
+                is_physical: is_physical_ethernet(&adapter.name, &adapter.description),
+                description: adapter.description,
+                name: adapter.name,
+            }
+        })
+        .collect()
 }
 
 /// 物理以太网口判定：名称或描述命中虚拟网卡、无线标记即排除
@@ -393,11 +359,18 @@ pub fn is_direct_link_ip(ip: &str) -> bool {
 /// 已有机器用同一个地址，多半是两台机器配成了同一个角色
 #[must_use]
 pub fn link_address_problem(ip: &str) -> Option<String> {
-    let script = format!(
-        "(Get-NetIPAddress -IPAddress {ip} -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -First 1).AddressState"
-    );
-    let state = run_powershell(&script).ok()?;
-    describe_address_state(state.trim())
+    describe_address_state(dad_state_name(crate::win::address_state(ip)?))
+}
+
+/// Win32 的重复检测状态转成说明用的名字
+fn dad_state_name(state: i32) -> &'static str {
+    match state {
+        1 => "Tentative",
+        2 => "Duplicate",
+        3 => "Deprecated",
+        4 => "Preferred",
+        _ => "Invalid",
+    }
 }
 
 /// 把地址状态翻成给用户看的话，可用时为 `None`
@@ -485,16 +458,13 @@ mod tests {
     }
 
     #[test]
-    fn parses_multiple_addresses_per_adapter() {
-        let parsed = split_nic_line("以太网|Realtek GbE|10.10.10.1,192.168.88.2").expect("parse");
-        assert_eq!(parsed.0, "以太网");
-        assert_eq!(parsed.1, "Realtek GbE");
-        assert_eq!(
-            parsed.2,
-            vec!["10.10.10.1".to_owned(), "192.168.88.2".to_owned()]
-        );
-        let empty = split_nic_line("WLAN|Intel AX201|").expect("parse");
-        assert_eq!(empty.2, Vec::<String>::new());
+    fn dad_state_names_cover_windows_values() {
+        // Win32 的取值必须翻成能看的说明，未知值不能当成可用
+        assert_eq!(dad_state_name(4), "Preferred");
+        assert_eq!(dad_state_name(2), "Duplicate");
+        assert_eq!(dad_state_name(1), "Tentative");
+        assert_eq!(dad_state_name(0), "Invalid");
+        assert_eq!(dad_state_name(99), "Invalid");
     }
 
     #[test]
@@ -554,20 +524,11 @@ mod tests {
     }
 
     #[test]
-    fn elevation_probe_script_stays_on_one_line() {
-        // 续行拼接会插入空格，PowerShell 解析失败后所有人都被判成未提权
-        assert!(ELEVATION_PROBE.contains(").IsInRole("), "{ELEVATION_PROBE}");
-        assert!(!ELEVATION_PROBE.contains(") ."), "{ELEVATION_PROBE}");
-        assert!(!ELEVATION_PROBE.contains('\n'), "{ELEVATION_PROBE}");
-    }
-
-    #[test]
-    fn elevation_probe_answers_on_this_machine() {
-        // 探测必须真的给出答案，取不到答案说明脚本本身有问题
-        assert!(
-            elevation_state().is_some(),
-            "提权探测没有返回结果，说明探测脚本执行失败"
-        );
+    fn elevation_answers_without_a_script() {
+        // 原生取令牌没有"脚本执行失败"这种失败模式，必须能给出答案
+        let state = elevation_state();
+        assert!(state.is_some(), "提权状态没有返回结果");
+        assert_eq!(is_elevated(), state != Some(false));
     }
 
     #[test]
@@ -644,39 +605,17 @@ mod tests {
     }
 
     #[test]
-    fn nic_line_splitting() {
-        assert_eq!(
-            split_nic_line("以太网|Gigabit Ethernet Controller|192.168.88.1"),
-            Some((
-                "以太网".to_owned(),
-                "Gigabit Ethernet Controller".to_owned(),
-                vec!["192.168.88.1".to_owned()]
-            ))
-        );
-        // 无 IP 的网口
-        assert_eq!(
-            split_nic_line("本地连接* 10|Microsoft Wi-Fi Direct Virtual Adapter #2|"),
-            Some((
-                "本地连接* 10".to_owned(),
-                "Microsoft Wi-Fi Direct Virtual Adapter #2".to_owned(),
-                Vec::new()
-            ))
-        );
-        // 描述里含 | 时地址仍是最后一段
-        assert_eq!(
-            split_nic_line("a|desc|with|pipe|10.0.0.1").map(|(_, _, ips)| ips),
-            Some(vec!["10.0.0.1".to_owned()])
-        );
-        // 行数不足
-        assert_eq!(split_nic_line("只有一段"), None);
-    }
-
-    #[test]
     fn list_nics_runs_without_panic() {
         // CI 环境网卡差异大，不做内容断言，只验证结构完整
         for nic in list_nics() {
             assert_ne!(nic.name, "");
         }
+    }
+
+    #[test]
+    fn list_nics_are_enumerated_natively() {
+        // 原生枚举取不到网卡时，选角色与找对端都会失去依据
+        assert!(!list_nics().is_empty(), "没有枚举到任何网口");
     }
 
     #[test]

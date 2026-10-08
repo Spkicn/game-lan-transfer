@@ -17,3 +17,14 @@ serde_json = "1.0.151"
 blake3 = "1.8.7"
 rand = "0.10.3"
 fastcdc = "5.0.0"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Threading",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_Networking_WinSock",
+    "Win32_UI_Shell",
+] }

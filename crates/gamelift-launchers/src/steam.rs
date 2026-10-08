@@ -49,27 +49,27 @@ pub fn steam_root() -> Option<PathBuf> {
 }
 
 /// 从注册表读 SteamPath，未安装或无权限时返回 None
+///
+/// 走 winreg 直接读，不再起 `reg query`：少一次进程创建，也没有编码与转义问题
+#[cfg(windows)]
 fn steam_path_from_registry() -> Option<PathBuf> {
-    let output = gamelift_core::shell::hidden_command("reg")
-        .args([
-            "query",
-            r"HKLM\SOFTWARE\WOW6432Node\Valve\Steam",
-            "/v",
-            "SteamPath",
-        ])
-        .output()
+    use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_32KEY};
+    use winreg::RegKey;
+
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    // Steam 是 32 位程序，地址写在 32 位视图里
+    let key = hklm
+        .open_subkey_with_flags(r"SOFTWARE\Valve\Steam", KEY_READ | KEY_WOW64_32KEY)
         .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let text = String::from_utf8_lossy(&output.stdout);
-    // 行样例: "    SteamPath    REG_SZ    C:/Program Files (x86)/Steam"
-    let line = text
-        .lines()
-        .find(|l| l.contains("SteamPath") && l.contains("REG_SZ"))?;
-    let value = line.split("REG_SZ").nth(1)?.trim();
+    let value: String = key.get_value("SteamPath").ok()?;
     let path = PathBuf::from(value);
     path.is_dir().then_some(path)
+}
+
+/// 非 Windows 平台没有这份注册表
+#[cfg(not(windows))]
+fn steam_path_from_registry() -> Option<PathBuf> {
+    None
 }
 
 /// 枚举全部库的 steamapps 目录，含 libraryfolders.vdf 注册的额外库

@@ -31,6 +31,8 @@ pub struct Adapter {
     pub description: String,
     /// 是否是以太网或无线这类物理网卡
     pub is_physical: bool,
+    /// 接口 LUID，写静态地址时用它指定网卡
+    pub luid: u64,
     /// 地址与它的重复检测状态
     pub ipv4: Vec<(Ipv4Addr, i32)>,
 }
@@ -119,6 +121,7 @@ pub fn adapters() -> Vec<Adapter> {
                 name,
                 description,
                 is_physical: adapter.IfType == 6 || adapter.IfType == 71,
+                luid: adapter.Luid.Value,
                 ipv4,
             });
             current = adapter.Next;
@@ -216,6 +219,16 @@ mod tests {
         // 结果随运行环境而定，这里只验证两次调用一致而不是报错
         let elevated = is_elevated();
         assert_eq!(elevated, is_elevated(), "两次调用结果必须一致");
+    }
+
+    #[test]
+    fn adapters_carry_an_interface_luid() {
+        // 写静态地址要用 LUID 指定网卡，全零说明没取到
+        let list = adapters();
+        assert!(
+            list.iter().any(|adapter| adapter.luid != 0),
+            "所有网卡的 LUID 都是零：{list:?}"
+        );
     }
 
     #[test]

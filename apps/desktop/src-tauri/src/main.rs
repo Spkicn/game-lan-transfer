@@ -1250,17 +1250,14 @@ fn elevation_status() -> Option<bool> {
 #[tauri::command(async)]
 fn relaunch_elevated(app: AppHandle, role: Option<String>) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(io_text)?;
-    // 角色只认这两个值，不把界面传来的字符串直接拼进脚本
-    let forward = match role.as_deref() {
-        Some("sender") => " -ArgumentList '--role sender'".to_owned(),
-        Some("receiver") => " -ArgumentList '--role receiver'".to_owned(),
-        _ => String::new(),
-    };
-    let script = format!(
-        "Start-Process -FilePath '{}' -Verb RunAs{forward}",
-        exe.display().to_string().replace('\'', "''")
-    );
-    link::run_powershell(&script).map_err(describe)?;
+    // 角色只认这两个值，不把界面传来的字符串直接拼进命令行
+    let mut args: Vec<&str> = Vec::new();
+    match role.as_deref() {
+        Some("sender") => args.extend(["--role", "sender"]),
+        Some("receiver") => args.extend(["--role", "receiver"]),
+        _ => {}
+    }
+    gamelift_core::win::relaunch_as_admin(&exe, &args)?;
     app.exit(0);
     Ok(())
 }

@@ -153,6 +153,49 @@ fn wide_to_string(ptr: windows::core::PWSTR) -> String {
     }
 }
 
+/// 以管理员身份重启指定程序
+///
+/// 走 `ShellExecuteW` 的 runas 动词，不再拼 PowerShell 的 Start-Process
+///
+/// # Errors
+///
+/// 用户在 UAC 上取消或系统拒绝启动时返回说明
+pub fn relaunch_as_admin(exe: &std::path::Path, args: &[&str]) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    let wide = |text: &str| -> Vec<u16> {
+        std::ffi::OsStr::new(text)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
+    };
+    let file = wide(&exe.to_string_lossy());
+    let parameters = wide(&args.join(" "));
+    let verb = wide("runas");
+    let started = unsafe {
+        ShellExecuteW(
+            None,
+            PCWSTR(verb.as_ptr()),
+            PCWSTR(file.as_ptr()),
+            PCWSTR(parameters.as_ptr()),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    // 返回值大于 32 才算成功，5 是用户按了「否」
+    let code = started.0 as usize;
+    if code > 32 {
+        return Ok(());
+    }
+    if code == 5 {
+        return Err("权限请求被取消：想改网络设置时再点一次即可".to_owned());
+    }
+    Err(format!("以管理员身份启动失败，错误码 {code}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

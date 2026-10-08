@@ -231,17 +231,22 @@ pub fn configure_direct_link(host_octet: u8) -> Result<LinkSetup> {
     if !is_elevated() {
         return Err(Error::Shell(ELEVATION_HINT.to_owned()));
     }
-    let safe_name = nic.name.replace('\'', "''");
     // 先查再补，避免网络波动后重试时报「地址已存在」
-    let script = format!(
-        "$existing = Get-NetIPAddress -InterfaceAlias '{safe_name}' -AddressFamily IPv4 -ErrorAction SilentlyContinue \
-           | Where-Object {{ $_.IPAddress -eq '{ip}' }}; \
-         if (-not $existing) {{ \
-           New-NetIPAddress -InterfaceAlias '{safe_name}' -IPAddress {ip} -PrefixLength 24 -ErrorAction Stop \
-         }}; \
-         Set-NetConnectionProfile -InterfaceAlias '{safe_name}' -NetworkCategory Private -ErrorAction SilentlyContinue"
+    let already = list_nics()
+        .into_iter()
+        .any(|candidate| candidate.name == nic.name && candidate.has_address(&ip));
+    if !already {
+        let address: std::net::Ipv4Addr = ip
+            .parse()
+            .map_err(|_| Error::Shell(format!("地址不合法: {ip}")))?;
+        crate::win::add_static_ipv4(&nic.name, address, 24).map_err(Error::Shell)?;
+    }
+    // 网络位置只能走 Network List Manager 的 COM 接口，这里保留一条只做这件事的窄脚本
+    let safe_name = nic.name.replace('\'', "''");
+    let profile = format!(
+        "Set-NetConnectionProfile -InterfaceAlias '{safe_name}' -NetworkCategory Private -ErrorAction SilentlyContinue"
     );
-    run_powershell(&script)?;
+    run_powershell(&profile)?;
     // 读回确认，没配上就报出来，不要假装成功
     let applied = list_nics()
         .into_iter()
